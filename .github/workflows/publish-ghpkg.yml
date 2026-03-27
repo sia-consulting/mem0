@@ -1,0 +1,45 @@
+name: Publish Python 🐍 package to GitHub Packages
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: 'Version tag to build (e.g., v1.0.0). Leave empty to use current pyproject.toml version.'
+        required: false
+        type: string
+
+jobs:
+  build-and-publish:
+    if: github.repository == 'sia-consulting/mem0'
+    name: Build and publish to GitHub Packages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install build tools
+        run: pip install hatch
+
+      - name: Build package
+        run: hatch build --clean
+
+      - name: Upload release assets
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/

@@ -17,6 +17,7 @@ on:
 
 jobs:
   check_changes:
+    if: github.repository == 'sia-consulting/mem0'
     runs-on: ubuntu-latest
     outputs:
       mem0_changed: ${{ steps.filter.outputs.mem0 }}
@@ -108,9 +109,3 @@ jobs:
         run: cd embedchain && make lint
       - name: Run tests and generate coverage report
         run: cd embedchain && make coverage
-      - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v3
-        with:
-          file: coverage.xml
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
