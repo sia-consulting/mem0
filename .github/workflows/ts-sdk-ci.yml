@@ -12,6 +12,7 @@ on:
 
 jobs:
   check_changes:
+    if: github.repository == 'sia-consulting/mem0'
     runs-on: ubuntu-latest
     outputs:
       ts_sdk_changed: ${{ steps.filter.outputs.ts_sdk }}

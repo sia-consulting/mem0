@@ -6,6 +6,7 @@ on:
 
 jobs:
   build-n-publish:
+    if: github.repository == 'sia-consulting/mem0'
     name: Build and publish Python 🐍 distributions 📦 to PyPI and TestPyPI
     runs-on: ubuntu-latest
     permissions:

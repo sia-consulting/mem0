@@ -17,6 +17,7 @@ on:
 
 jobs:
   check_changes:
+    if: github.repository == 'sia-consulting/mem0'
     runs-on: ubuntu-latest
     outputs:
       mem0_changed: ${{ steps.filter.outputs.mem0 }}

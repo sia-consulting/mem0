@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   label:
+    if: github.repository == 'sia-consulting/mem0'
     runs-on: ubuntu-latest
     steps:
       - uses: stefanbuck/github-issue-parser@v3

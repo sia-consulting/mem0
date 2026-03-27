@@ -14,6 +14,7 @@ on:
 
 jobs:
   lint:
+    if: github.repository == 'sia-consulting/mem0'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -37,6 +38,7 @@ jobs:
         run: cd openclaw && pnpm exec tsc --noEmit
 
   test:
+    if: github.repository == 'sia-consulting/mem0'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -72,6 +74,7 @@ jobs:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
   build:
+    if: github.repository == 'sia-consulting/mem0'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
