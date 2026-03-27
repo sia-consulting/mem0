@@ -56,8 +56,12 @@ class AzureFoundryLLM(LLMBase):
 
         # If the API key is not provided or is a placeholder, use DefaultAzureCredential
         # for passwordless authentication via managed identities, Azure CLI, etc.
+        # To specify a user-assigned managed identity, set managed_identity_client_id in
+        # config or use the AZURE_CLIENT_ID env var (natively supported by azure-identity).
         if api_key is None or api_key == "" or api_key == "your-api-key":
-            credential = DefaultAzureCredential()
+            credential = DefaultAzureCredential(
+                managed_identity_client_id=self.config.managed_identity_client_id,
+            )
         else:
             credential = AzureKeyCredential(api_key)
 

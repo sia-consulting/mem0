@@ -88,7 +88,7 @@ def test_init_missing_api_key_uses_default_credential(monkeypatch):
     ):
         mock_cred_instance = mock_cred.return_value
         embedder = AzureFoundryEmbedding(config)
-        mock_cred.assert_called_once()
+        mock_cred.assert_called_once_with(managed_identity_client_id=None)
         mock_client_cls.assert_called_once_with(
             endpoint=ENDPOINT,
             credential=mock_cred_instance,
@@ -106,7 +106,28 @@ def test_init_with_placeholder_api_key_uses_default_credential(monkeypatch):
     ):
         mock_cred_instance = mock_cred.return_value
         AzureFoundryEmbedding(config)
-        mock_cred.assert_called_once()
+        mock_cred.assert_called_once_with(managed_identity_client_id=None)
+        mock_client_cls.assert_called_once_with(
+            endpoint=ENDPOINT,
+            credential=mock_cred_instance,
+        )
+
+
+def test_init_with_managed_identity_client_id(monkeypatch):
+    """User-assigned managed identity client ID should be passed to DefaultAzureCredential."""
+    monkeypatch.delenv("AZURE_FOUNDRY_EMBEDDING_API_KEY", raising=False)
+    client_id = "12345678-1234-1234-1234-123456789abc"
+    config = BaseEmbedderConfig(
+        model=MODEL, openai_base_url=ENDPOINT, managed_identity_client_id=client_id,
+    )
+
+    with (
+        patch("mem0.embeddings.azure_foundry.EmbeddingsClient") as mock_client_cls,
+        patch("mem0.embeddings.azure_foundry.DefaultAzureCredential") as mock_cred,
+    ):
+        mock_cred_instance = mock_cred.return_value
+        AzureFoundryEmbedding(config)
+        mock_cred.assert_called_once_with(managed_identity_client_id=client_id)
         mock_client_cls.assert_called_once_with(
             endpoint=ENDPOINT,
             credential=mock_cred_instance,

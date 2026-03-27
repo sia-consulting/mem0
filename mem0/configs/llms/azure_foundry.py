@@ -27,6 +27,7 @@ class AzureFoundryConfig(BaseLlmConfig):
         http_client_proxies: Optional[dict] = None,
         # Azure AI Foundry-specific parameters
         endpoint: Optional[str] = None,
+        managed_identity_client_id: Optional[str] = None,
     ):
         """
         Initialize Azure AI Foundry configuration.
@@ -34,7 +35,8 @@ class AzureFoundryConfig(BaseLlmConfig):
         Args:
             model: Model deployment name to use, defaults to None
             temperature: Controls randomness, defaults to 0.1
-            api_key: Azure AI Foundry API key, defaults to None
+            api_key: Azure AI Foundry API key, defaults to None. When not provided,
+                DefaultAzureCredential is used for passwordless auth.
             max_tokens: Maximum tokens to generate, defaults to 2000
             top_p: Nucleus sampling parameter, defaults to 0.1
             top_k: Top-k sampling parameter, defaults to 1
@@ -43,6 +45,9 @@ class AzureFoundryConfig(BaseLlmConfig):
             http_client_proxies: HTTP client proxy settings, defaults to None
             endpoint: Azure AI Foundry endpoint URL (e.g.,
                 "https://<resource>.services.ai.azure.com/models"), defaults to None
+            managed_identity_client_id: Client ID of a user-assigned managed identity
+                to use with DefaultAzureCredential. Only used when api_key is not
+                provided. Defaults to None (system-assigned identity).
         """
         super().__init__(
             model=model,
@@ -57,3 +62,4 @@ class AzureFoundryConfig(BaseLlmConfig):
         )
 
         self.endpoint = endpoint
+        self.managed_identity_client_id = managed_identity_client_id
