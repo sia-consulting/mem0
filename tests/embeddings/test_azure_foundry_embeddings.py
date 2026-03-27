@@ -77,10 +77,37 @@ def test_init_missing_endpoint(monkeypatch):
             AzureFoundryEmbedding(config)
 
 
-def test_init_missing_api_key(monkeypatch):
+def test_init_missing_api_key_uses_default_credential(monkeypatch):
+    """When no API key is provided, DefaultAzureCredential is used for managed identity auth."""
     monkeypatch.delenv("AZURE_FOUNDRY_EMBEDDING_API_KEY", raising=False)
     config = BaseEmbedderConfig(model=MODEL, openai_base_url=ENDPOINT)
 
-    with patch("mem0.embeddings.azure_foundry.EmbeddingsClient"):
-        with pytest.raises(ValueError, match="API key is required"):
-            AzureFoundryEmbedding(config)
+    with (
+        patch("mem0.embeddings.azure_foundry.EmbeddingsClient") as mock_client_cls,
+        patch("mem0.embeddings.azure_foundry.DefaultAzureCredential") as mock_cred,
+    ):
+        mock_cred_instance = mock_cred.return_value
+        embedder = AzureFoundryEmbedding(config)
+        mock_cred.assert_called_once()
+        mock_client_cls.assert_called_once_with(
+            endpoint=ENDPOINT,
+            credential=mock_cred_instance,
+        )
+
+
+def test_init_with_placeholder_api_key_uses_default_credential(monkeypatch):
+    """Placeholder API key should trigger DefaultAzureCredential."""
+    monkeypatch.delenv("AZURE_FOUNDRY_EMBEDDING_API_KEY", raising=False)
+    config = BaseEmbedderConfig(model=MODEL, api_key="your-api-key", openai_base_url=ENDPOINT)
+
+    with (
+        patch("mem0.embeddings.azure_foundry.EmbeddingsClient") as mock_client_cls,
+        patch("mem0.embeddings.azure_foundry.DefaultAzureCredential") as mock_cred,
+    ):
+        mock_cred_instance = mock_cred.return_value
+        AzureFoundryEmbedding(config)
+        mock_cred.assert_called_once()
+        mock_client_cls.assert_called_once_with(
+            endpoint=ENDPOINT,
+            credential=mock_cred_instance,
+        )

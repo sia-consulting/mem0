@@ -151,10 +151,56 @@ def test_init_missing_endpoint(monkeypatch):
             AzureFoundryLLM(config)
 
 
-def test_init_missing_api_key(monkeypatch):
+def test_init_missing_api_key_uses_default_credential(monkeypatch):
+    """When no API key is provided, DefaultAzureCredential is used for managed identity auth."""
     monkeypatch.delenv("AZURE_FOUNDRY_API_KEY", raising=False)
     config = AzureFoundryConfig(model=MODEL, endpoint=ENDPOINT)
 
-    with patch("mem0.llms.azure_foundry.ChatCompletionsClient"):
-        with pytest.raises(ValueError, match="API key is required"):
-            AzureFoundryLLM(config)
+    with (
+        patch("mem0.llms.azure_foundry.ChatCompletionsClient") as mock_client_cls,
+        patch("mem0.llms.azure_foundry.DefaultAzureCredential") as mock_cred,
+    ):
+        mock_cred_instance = mock_cred.return_value
+        llm = AzureFoundryLLM(config)
+        mock_cred.assert_called_once()
+        mock_client_cls.assert_called_once_with(
+            endpoint=ENDPOINT,
+            credential=mock_cred_instance,
+        )
+        assert llm.config.model == MODEL
+
+
+def test_init_with_placeholder_api_key_uses_default_credential(monkeypatch):
+    """Placeholder API key should trigger DefaultAzureCredential."""
+    monkeypatch.delenv("AZURE_FOUNDRY_API_KEY", raising=False)
+    config = AzureFoundryConfig(model=MODEL, api_key="your-api-key", endpoint=ENDPOINT)
+
+    with (
+        patch("mem0.llms.azure_foundry.ChatCompletionsClient") as mock_client_cls,
+        patch("mem0.llms.azure_foundry.DefaultAzureCredential") as mock_cred,
+    ):
+        mock_cred_instance = mock_cred.return_value
+        llm = AzureFoundryLLM(config)
+        mock_cred.assert_called_once()
+        mock_client_cls.assert_called_once_with(
+            endpoint=ENDPOINT,
+            credential=mock_cred_instance,
+        )
+
+
+def test_init_with_empty_api_key_uses_default_credential(monkeypatch):
+    """Empty API key should trigger DefaultAzureCredential."""
+    monkeypatch.delenv("AZURE_FOUNDRY_API_KEY", raising=False)
+    config = AzureFoundryConfig(model=MODEL, api_key="", endpoint=ENDPOINT)
+
+    with (
+        patch("mem0.llms.azure_foundry.ChatCompletionsClient") as mock_client_cls,
+        patch("mem0.llms.azure_foundry.DefaultAzureCredential") as mock_cred,
+    ):
+        mock_cred_instance = mock_cred.return_value
+        AzureFoundryLLM(config)
+        mock_cred.assert_called_once()
+        mock_client_cls.assert_called_once_with(
+            endpoint=ENDPOINT,
+            credential=mock_cred_instance,
+        )

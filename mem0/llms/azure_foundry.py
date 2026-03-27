@@ -4,6 +4,7 @@ from typing import Dict, List, Optional, Union
 
 from azure.ai.inference import ChatCompletionsClient
 from azure.core.credentials import AzureKeyCredential
+from azure.identity import DefaultAzureCredential
 
 from mem0.configs.llms.azure_foundry import AzureFoundryConfig
 from mem0.configs.llms.base import BaseLlmConfig
@@ -15,8 +16,10 @@ class AzureFoundryLLM(LLMBase):
     """
     LLM provider for Azure AI Foundry using the azure-ai-inference SDK.
 
-    Uses ChatCompletionsClient with endpoint + API key authentication,
-    which is the recommended approach for Azure AI Foundry deployments.
+    Uses ChatCompletionsClient with endpoint + credential authentication.
+    Supports both API key and managed identity (passwordless) authentication.
+    When no API key is provided, falls back to DefaultAzureCredential for
+    passwordless auth via managed identities, Azure CLI, etc.
     """
 
     def __init__(self, config: Optional[Union[BaseLlmConfig, AzureFoundryConfig, Dict]] = None):
@@ -51,15 +54,16 @@ class AzureFoundryLLM(LLMBase):
                 "Set it via config.endpoint or the AZURE_FOUNDRY_ENDPOINT environment variable."
             )
 
-        if not api_key:
-            raise ValueError(
-                "Azure AI Foundry API key is required. "
-                "Set it via config.api_key or the AZURE_FOUNDRY_API_KEY environment variable."
-            )
+        # If the API key is not provided or is a placeholder, use DefaultAzureCredential
+        # for passwordless authentication via managed identities, Azure CLI, etc.
+        if api_key is None or api_key == "" or api_key == "your-api-key":
+            credential = DefaultAzureCredential()
+        else:
+            credential = AzureKeyCredential(api_key)
 
         self.client = ChatCompletionsClient(
             endpoint=endpoint,
-            credential=AzureKeyCredential(api_key),
+            credential=credential,
         )
 
     def _parse_response(self, response, tools):
