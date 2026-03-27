@@ -19,6 +19,7 @@ class LlmConfig(BaseModel):
             "aws_bedrock",
             "litellm",
             "azure_openai",
+            "azure_foundry",
             "openai_structured",
             "azure_openai_structured",
             "gemini",
