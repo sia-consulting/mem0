@@ -64,15 +64,6 @@ jobs:
       - name: Run tests with coverage
         run: cd openclaw && pnpm exec vitest run --coverage
 
-      - name: Upload coverage to Codecov
-        if: matrix.node-version == 20
-        uses: codecov/codecov-action@v4
-        with:
-          flags: openclaw
-          directory: openclaw/coverage
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-
   build:
     if: github.repository == 'sia-consulting/mem0'
     runs-on: ubuntu-latest

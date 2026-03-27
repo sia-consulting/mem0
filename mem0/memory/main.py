@@ -268,6 +268,12 @@ class Memory(MemoryBase):
                 config.reranker.config
             )
 
+        # Log configured providers for visibility
+        self._log_provider_config()
+
+        # Validate embedding dimensions match vector store expectations
+        self._validate_embedding_dimensions()
+
         self.enable_graph = False
 
         if self.config.graph_store.config:
@@ -303,6 +309,43 @@ class Memory(MemoryBase):
                 self.config.vector_store.provider, telemetry_config
             )
         capture_event("mem0.init", self, {"sync_type": "sync"})
+
+    def _log_provider_config(self):
+        """Log the configured LLM and embedding providers at startup for visibility."""
+        llm_provider = self.config.llm.provider
+        llm_model = getattr(self.llm.config, "model", None) or "default"
+        embedder_provider = self.config.embedder.provider
+        embedder_model = getattr(self.embedding_model.config, "model", None) or "default"
+        vector_provider = self.config.vector_store.provider
+
+        logger.info(
+            "Memory initialized — LLM: %s/%s, Embedder: %s/%s, VectorStore: %s",
+            llm_provider, llm_model, embedder_provider, embedder_model, vector_provider,
+        )
+
+    def _validate_embedding_dimensions(self):
+        """Validate that configured embedding dimensions match vector store expectations.
+
+        Checks the embedder's ``embedding_dims`` (from the user config dict) against
+        the vector store's ``embedding_model_dims``.  When the values disagree, a
+        warning is emitted so the mismatch is caught at startup rather than at the
+        first ``add`` / ``search`` call.
+        """
+        embedder_dims = self.config.embedder.config.get("embedding_dims") if isinstance(
+            self.config.embedder.config, dict
+        ) else getattr(self.config.embedder.config, "embedding_dims", None)
+
+        vs_config = self.config.vector_store.config
+        vs_dims = getattr(vs_config, "embedding_model_dims", None)
+
+        if embedder_dims is not None and vs_dims is not None and embedder_dims != vs_dims:
+            logger.warning(
+                "Embedding dimension mismatch: embedder config specifies %d dimensions "
+                "but vector store expects %d. This will cause errors at runtime. "
+                "Set 'embedding_dims' in the embedder config and 'embedding_model_dims' "
+                "in the vector store config to the same value.",
+                embedder_dims, vs_dims,
+            )
 
     @classmethod
     def from_config(cls, config_dict: Dict[str, Any]):
