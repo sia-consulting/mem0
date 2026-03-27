@@ -138,6 +138,177 @@ if __name__ == "__main__":
 
 For detailed integration steps, see the [Quickstart](https://docs.mem0.ai/quickstart) and [API Reference](https://docs.mem0.ai/api-reference).
 
+---
+
+## ☁️ Azure AI Foundry Setup (sia-consulting fork)
+
+This fork adds an **Azure AI Foundry** provider for both LLM and embeddings, powered by the [`azure-ai-inference`](https://pypi.org/project/azure-ai-inference/) SDK. It works with **any model** deployed to Azure AI Foundry — including OpenAI (GPT-4o, GPT-4.1), Anthropic (Claude), Meta (Llama), Mistral, and more.
+
+### Installation
+
+Install from the fork's GitHub Packages (replace `TOKEN` with your GitHub PAT):
+
+```bash
+pip install mem0ai --extra-index-url https://TOKEN@ghp.pkg.github.com/sia-consulting/mem0/simple/
+```
+
+Or install the extra dependencies for Azure AI Foundry support on any mem0 install:
+
+```bash
+pip install "azure-ai-inference>=1.0.0b9" "azure-identity>=1.24.0"
+```
+
+### Prerequisites
+
+1. **Azure AI Foundry resource** — create one in the [Azure Portal](https://portal.azure.com) or via the [Azure AI Foundry portal](https://ai.azure.com).
+2. **Model deployments** — deploy a chat completion model (e.g. `gpt-4o`) and an embedding model (e.g. `text-embedding-3-small`) to your resource.
+3. **Authentication** — either an API key or a managed identity / Azure CLI credential.
+
+### Configuration
+
+```python
+from mem0 import Memory
+
+config = {
+    "llm": {
+        "provider": "azure_foundry",
+        "config": {
+            "model": "gpt-4o",                  # deployment name
+            "endpoint": "https://<resource>.services.ai.azure.com/models",
+            "api_key": "your-api-key",           # or omit for managed identity
+            "temperature": 0.1,
+            "max_tokens": 2000,
+        },
+    },
+    "embedder": {
+        "provider": "azure_foundry",
+        "config": {
+            "model": "text-embedding-3-small",   # deployment name
+            "openai_base_url": "https://<resource>.services.ai.azure.com/models",
+            "api_key": "your-api-key",           # or omit for managed identity
+            "embedding_dims": 1536,              # must match vector store dims
+        },
+    },
+    "vector_store": {
+        "provider": "qdrant",
+        "config": {
+            "embedding_model_dims": 1536,        # must match embedder dims
+            "path": "/tmp/mem0_qdrant",
+        },
+    },
+}
+
+memory = Memory.from_config(config)
+```
+
+### Environment Variables
+
+Instead of passing credentials in code, set these environment variables:
+
+| Variable | Description |
+|---|---|
+| `AZURE_FOUNDRY_API_KEY` | API key for the chat completion endpoint |
+| `AZURE_FOUNDRY_ENDPOINT` | Chat completion endpoint URL |
+| `AZURE_FOUNDRY_EMBEDDING_API_KEY` | API key for the embedding endpoint |
+| `AZURE_FOUNDRY_EMBEDDING_ENDPOINT` | Embedding endpoint URL |
+
+When API keys are omitted, the provider automatically uses [`DefaultAzureCredential`](https://learn.microsoft.com/en-us/python/api/azure-identity/azure.identity.defaultazurecredential) for passwordless auth (managed identity, Azure CLI, etc.).
+
+### Managed Identity (Passwordless) Auth
+
+For deployment on Azure (App Service, Container Apps, AKS, VMs), omit the API key to use managed identity:
+
+```python
+config = {
+    "llm": {
+        "provider": "azure_foundry",
+        "config": {
+            "model": "gpt-4o",
+            "endpoint": "https://<resource>.services.ai.azure.com/models",
+            # No api_key → uses DefaultAzureCredential automatically
+            "managed_identity_client_id": "...",  # optional, for user-assigned MI
+        },
+    },
+    "embedder": {
+        "provider": "azure_foundry",
+        "config": {
+            "model": "text-embedding-3-small",
+            "openai_base_url": "https://<resource>.services.ai.azure.com/models",
+            "embedding_dims": 1536,
+        },
+    },
+}
+```
+
+You can also set `AZURE_CLIENT_ID` for user-assigned managed identity (natively supported by `azure-identity`).
+
+### Embedding & LLM Model Compatibility
+
+The chat completion model and embedding model are **independent** — any chat model works with any embedding model. The critical compatibility requirement is between the **embedding model** and the **vector store**:
+
+> **`embedding_dims` (embedder config) must equal `embedding_model_dims` (vector store config)**
+
+At startup, mem0 validates this and logs a warning if they don't match:
+
+```
+WARNING  Embedding dimension mismatch: embedder config specifies 768 dimensions
+         but vector store expects 1536. This will cause errors at runtime.
+```
+
+Common embedding dimensions:
+
+| Model | Dimensions |
+|---|---|
+| `text-embedding-3-small` | 1536 |
+| `text-embedding-3-large` | 3072 |
+| `text-embedding-ada-002` | 1536 |
+
+### Full Example
+
+```python
+import os
+from mem0 import Memory
+
+os.environ["AZURE_FOUNDRY_API_KEY"] = "your-key"
+os.environ["AZURE_FOUNDRY_ENDPOINT"] = "https://myresource.services.ai.azure.com/models"
+os.environ["AZURE_FOUNDRY_EMBEDDING_API_KEY"] = "your-key"
+os.environ["AZURE_FOUNDRY_EMBEDDING_ENDPOINT"] = "https://myresource.services.ai.azure.com/models"
+
+memory = Memory.from_config({
+    "llm": {
+        "provider": "azure_foundry",
+        "config": {"model": "gpt-4o"},
+    },
+    "embedder": {
+        "provider": "azure_foundry",
+        "config": {
+            "model": "text-embedding-3-small",
+            "embedding_dims": 1536,
+        },
+    },
+    "vector_store": {
+        "provider": "qdrant",
+        "config": {
+            "embedding_model_dims": 1536,
+            "path": "/tmp/mem0_qdrant",
+        },
+    },
+})
+
+# Add memories
+memory.add(
+    [{"role": "user", "content": "I prefer dark mode and use VS Code."}],
+    user_id="alice",
+)
+
+# Search memories
+results = memory.search(query="What editor does Alice use?", user_id="alice")
+for r in results["results"]:
+    print(r["memory"])
+```
+
+---
+
 ## 🔗 Integrations & Demos
 
 - **ChatGPT with Memory**: Personalized chat powered by Mem0 ([Live Demo](https://mem0.dev/demo))
