@@ -425,13 +425,16 @@ First, set up variables for convenience:
 
 ```bash
 ENDPOINT="https://<resource>.services.ai.azure.com/api/projects/<project>"
+API_VERSION="2024-05-01-preview"
 TOKEN=$(az account get-access-token --scope "https://ai.azure.com/.default" --query accessToken -o tsv)
 ```
+
+> **Important:** All Azure AI Foundry REST calls require the `api-version` query parameter. Without it you will get `{"error":{"code":"BadRequest","message":"Missing required query parameter: api-version"}}`. The SDKs add this automatically, but curl requests need it explicitly.
 
 **Test embeddings via the Model Inference API** (`/models` path — this is what mem0 uses):
 
 ```bash
-curl -s "${ENDPOINT}/models/embeddings" \
+curl -s "${ENDPOINT}/models/embeddings?api-version=${API_VERSION}" \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"input": ["hello world"], "model": "text-embedding-3-small"}' | head -c 500
@@ -442,7 +445,7 @@ This should return a JSON response with embedding vectors (status 200).
 **Compare with the broken OpenAI-compatible path** (`/openai/v1` — returns 404):
 
 ```bash
-curl -s -w "\nHTTP Status: %{http_code}\n" "${ENDPOINT}/openai/v1/embeddings" \
+curl -s -w "\nHTTP Status: %{http_code}\n" "${ENDPOINT}/openai/v1/embeddings?api-version=${API_VERSION}" \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"input": ["hello world"], "model": "text-embedding-3-small"}'
@@ -453,7 +456,7 @@ This will return `HTTP Status: 404` — this is the [known Azure service limitat
 **Test chat completions** (works on both paths, for comparison):
 
 ```bash
-curl -s "${ENDPOINT}/openai/v1/chat/completions" \
+curl -s "${ENDPOINT}/openai/v1/chat/completions?api-version=${API_VERSION}" \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "Say hello"}], "max_tokens": 50}' | head -c 500
