@@ -44,6 +44,56 @@ def test_generate_response_without_tools(mock_foundry_client):
     assert response == "I'm doing well, thank you for asking!"
 
 
+def test_generate_response_with_dict_response_format(mock_foundry_client):
+    """Dict response_format like {'type': 'json_object'} should be converted to string 'json_object'."""
+    config = AzureFoundryConfig(
+        model=MODEL, temperature=TEMPERATURE, max_tokens=MAX_TOKENS, top_p=TOP_P,
+        api_key=API_KEY, endpoint=ENDPOINT,
+    )
+    llm = AzureFoundryLLM(config)
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Return JSON."},
+    ]
+
+    mock_response = Mock()
+    mock_response.choices = [Mock(message=Mock(content='{"key": "value"}'))]
+    mock_foundry_client.complete.return_value = mock_response
+
+    response = llm.generate_response(messages, response_format={"type": "json_object"})
+
+    mock_foundry_client.complete.assert_called_once_with(
+        model=MODEL, messages=messages, temperature=TEMPERATURE, max_tokens=MAX_TOKENS, top_p=TOP_P,
+        response_format="json_object",
+    )
+    assert response == '{"key": "value"}'
+
+
+def test_generate_response_with_string_response_format(mock_foundry_client):
+    """String response_format should be passed through unchanged."""
+    config = AzureFoundryConfig(
+        model=MODEL, temperature=TEMPERATURE, max_tokens=MAX_TOKENS, top_p=TOP_P,
+        api_key=API_KEY, endpoint=ENDPOINT,
+    )
+    llm = AzureFoundryLLM(config)
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Return JSON."},
+    ]
+
+    mock_response = Mock()
+    mock_response.choices = [Mock(message=Mock(content='{"key": "value"}'))]
+    mock_foundry_client.complete.return_value = mock_response
+
+    response = llm.generate_response(messages, response_format="json_object")
+
+    mock_foundry_client.complete.assert_called_once_with(
+        model=MODEL, messages=messages, temperature=TEMPERATURE, max_tokens=MAX_TOKENS, top_p=TOP_P,
+        response_format="json_object",
+    )
+    assert response == '{"key": "value"}'
+
+
 def test_generate_response_with_tools(mock_foundry_client):
     config = AzureFoundryConfig(
         model=MODEL, temperature=TEMPERATURE, max_tokens=MAX_TOKENS, top_p=TOP_P,

@@ -133,7 +133,13 @@ class AzureFoundryLLM(LLMBase):
         })
 
         if response_format:
-            params["response_format"] = response_format
+            # The azure-ai-inference SDK expects response_format as a string
+            # literal ("text" or "json_object") or a JsonSchemaFormat object,
+            # not a dict like {"type": "json_object"}.
+            if isinstance(response_format, dict) and "type" in response_format:
+                params["response_format"] = response_format["type"]
+            else:
+                params["response_format"] = response_format
         if tools:
             params["tools"] = tools
             params["tool_choice"] = tool_choice
