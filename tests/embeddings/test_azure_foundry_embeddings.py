@@ -93,7 +93,7 @@ def test_init_missing_api_key_uses_default_credential(monkeypatch):
         mock_client_cls.assert_called_once_with(
             endpoint=ENDPOINT,
             credential=mock_cred_instance,
-            credential_scopes=["https://cognitiveservices.azure.com/.default"],
+            credential_scopes=["https://ai.azure.com/.default"],
         )
 
 
@@ -113,7 +113,7 @@ def test_init_with_placeholder_api_key_uses_default_credential(monkeypatch):
         mock_client_cls.assert_called_once_with(
             endpoint=ENDPOINT,
             credential=mock_cred_instance,
-            credential_scopes=["https://cognitiveservices.azure.com/.default"],
+            credential_scopes=["https://ai.azure.com/.default"],
         )
 
 
@@ -136,7 +136,7 @@ def test_init_with_managed_identity_client_id(monkeypatch):
         mock_client_cls.assert_called_once_with(
             endpoint=ENDPOINT,
             credential=mock_cred_instance,
-            credential_scopes=["https://cognitiveservices.azure.com/.default"],
+            credential_scopes=["https://ai.azure.com/.default"],
         )
 
 
@@ -160,7 +160,7 @@ def test_init_cognitive_services_endpoint_sets_credential_scopes(monkeypatch):
 
 
 def test_init_ai_foundry_endpoint_uses_sdk_default_scopes(monkeypatch):
-    """AI Foundry endpoints (*.services.ai.azure.com) should use cognitiveservices scope."""
+    """AI Foundry endpoints (*.services.ai.azure.com) should use ai.azure.com scope."""
     monkeypatch.delenv("AZURE_FOUNDRY_EMBEDDING_API_KEY", raising=False)
     monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
     config = BaseEmbedderConfig(model=MODEL, openai_base_url=ENDPOINT)
@@ -174,7 +174,7 @@ def test_init_ai_foundry_endpoint_uses_sdk_default_scopes(monkeypatch):
         mock_client_cls.assert_called_once_with(
             endpoint=ENDPOINT,
             credential=mock_cred_instance,
-            credential_scopes=["https://cognitiveservices.azure.com/.default"],
+            credential_scopes=["https://ai.azure.com/.default"],
         )
 
 

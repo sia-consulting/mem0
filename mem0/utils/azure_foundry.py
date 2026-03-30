@@ -26,12 +26,13 @@ def get_credential_scopes(endpoint: str, config_scopes: Optional[List[str]] = No
     if host.endswith(".cognitiveservices.azure.com") or host.endswith(".openai.azure.com"):
         return ["https://cognitiveservices.azure.com/.default"]
 
-    # AI Foundry endpoints (*.services.ai.azure.com) also need the Cognitive
-    # Services scope for managed-identity / DefaultAzureCredential auth.
-    # The SDK default ("https://ml.azure.com/.default") is only valid for
-    # user-delegated flows and causes an "invalid_scope" 400 error when a
-    # ManagedIdentityCredential requests a token from IMDS / App Service.
+    # AI Foundry endpoints (*.services.ai.azure.com) require the
+    # "https://ai.azure.com/.default" scope for managed-identity /
+    # DefaultAzureCredential auth.  The SDK default
+    # ("https://ml.azure.com/.default") is only valid for user-delegated
+    # flows and the Cognitive Services scope causes an "audience is
+    # incorrect" 401 error from the AI Foundry gateway.
     if host.endswith(".services.ai.azure.com"):
-        return ["https://cognitiveservices.azure.com/.default"]
+        return ["https://ai.azure.com/.default"]
 
     return None
