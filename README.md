@@ -417,6 +417,50 @@ memory = Memory.from_config(config)
 | `AZURE_AI_PROJECT_ENDPOINT` | Azure AI Foundry project endpoint URL |
 | `AZURE_CLIENT_ID` | Client ID for user-assigned managed identity (optional) |
 
+#### Troubleshooting: Testing Endpoints with curl
+
+You can verify your Azure AI Foundry project endpoint directly from the command line using `az account get-access-token` and `curl`. Replace `<resource>` and `<project>` with your actual values.
+
+First, set up variables for convenience:
+
+```bash
+ENDPOINT="https://<resource>.services.ai.azure.com/api/projects/<project>"
+TOKEN=$(az account get-access-token --scope "https://ai.azure.com/.default" --query accessToken -o tsv)
+```
+
+**Test embeddings via the Model Inference API** (`/models` path — this is what mem0 uses):
+
+```bash
+curl -s "${ENDPOINT}/models/embeddings" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"input": ["hello world"], "model": "text-embedding-3-small"}' | head -c 500
+```
+
+This should return a JSON response with embedding vectors (status 200).
+
+**Compare with the broken OpenAI-compatible path** (`/openai/v1` — returns 404):
+
+```bash
+curl -s -w "\nHTTP Status: %{http_code}\n" "${ENDPOINT}/openai/v1/embeddings" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"input": ["hello world"], "model": "text-embedding-3-small"}'
+```
+
+This will return `HTTP Status: 404` — this is the [known Azure service limitation](https://github.com/Azure/azure-sdk-for-python/issues/44532) that mem0 works around.
+
+**Test chat completions** (works on both paths, for comparison):
+
+```bash
+curl -s "${ENDPOINT}/openai/v1/chat/completions" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "Say hello"}], "max_tokens": 50}' | head -c 500
+```
+
+> **Note:** The token scope must be `https://ai.azure.com/.default` for AI Foundry project endpoints (`*.services.ai.azure.com`). Using other scopes (e.g. `https://cognitiveservices.azure.com/.default`) will result in a 401 "audience is incorrect" error.
+
 ---
 
 ## 🔗 Integrations & Demos
