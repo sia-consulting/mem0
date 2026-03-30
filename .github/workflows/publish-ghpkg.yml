@@ -17,8 +17,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      packages: write
-      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -38,13 +36,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-
-      - name: Publish to GitHub Packages
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          skip-existing: true
-          attestations: false
-          verbose: true
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
