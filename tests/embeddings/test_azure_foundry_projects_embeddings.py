@@ -60,10 +60,9 @@ def test_init_with_config(mock_project_client):
         endpoint=ENDPOINT,
         credential=mock_project_client["credential_instance"],
     )
-    # Verify base_url is set to /models path for Model Inference API (not /openai/v1)
-    mock_project_client["project_client"].get_openai_client.assert_called_once_with(
-        base_url=ENDPOINT + "/models",
-    )
+    # get_openai_client() must be called WITHOUT base_url so the SDK
+    # discovers the connected Azure OpenAI resource for embeddings.
+    mock_project_client["project_client"].get_openai_client.assert_called_once_with()
 
 
 def test_init_with_env_vars(monkeypatch, mock_project_client):
@@ -127,13 +126,11 @@ def test_init_config_client_id_takes_precedence_over_env_var(monkeypatch, mock_p
     )
 
 
-def test_init_trailing_slash_stripped_from_base_url(mock_project_client):
+def test_init_trailing_slash_stripped_from_endpoint(mock_project_client):
     endpoint_with_slash = ENDPOINT + "/"
     config = BaseEmbedderConfig(model=MODEL, openai_base_url=endpoint_with_slash)
 
     AzureFoundryProjectsEmbedding(config)
 
-    # Trailing slash should be stripped before appending /models
-    mock_project_client["project_client"].get_openai_client.assert_called_once_with(
-        base_url=ENDPOINT + "/models",
-    )
+    # get_openai_client() should be called without base_url regardless
+    mock_project_client["project_client"].get_openai_client.assert_called_once_with()

@@ -419,50 +419,42 @@ memory = Memory.from_config(config)
 
 #### Troubleshooting: Testing Endpoints with curl
 
-You can verify your Azure AI Foundry project endpoint directly from the command line using `az account get-access-token` and `curl`. Replace `<resource>` and `<project>` with your actual values.
+You can verify your Azure AI Foundry project endpoint directly from the command line using `az account get-access-token` and `curl`. Replace `<resource>`, `<project>`, and `<aoai-resource>` with your actual values.
 
 First, set up variables for convenience:
 
 ```bash
 ENDPOINT="https://<resource>.services.ai.azure.com/api/projects/<project>"
-API_VERSION="2024-05-01-preview"
+AOAI_ENDPOINT="https://<aoai-resource>.cognitiveservices.azure.com"
 TOKEN=$(az account get-access-token --scope "https://ai.azure.com/.default" --query accessToken -o tsv)
+AOAI_TOKEN=$(az account get-access-token --scope "https://cognitiveservices.azure.com/.default" --query accessToken -o tsv)
 ```
 
-> **Important:** All Azure AI Foundry REST calls require the `api-version` query parameter. Without it you will get `{"error":{"code":"BadRequest","message":"Missing required query parameter: api-version"}}`. The SDKs add this automatically, but curl requests need it explicitly.
+> **Important:** All Azure REST calls require the `api-version` query parameter. Without it you will get `{"error":{"code":"BadRequest","message":"Missing required query parameter: api-version"}}`. The SDKs add this automatically, but curl requests need it explicitly.
 
-**Test embeddings via the Model Inference API** (`/models` path — this is what mem0 uses):
-
-```bash
-curl -s "${ENDPOINT}/models/embeddings?api-version=${API_VERSION}" \
-  -H "Authorization: Bearer ${TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{"input": ["hello world"], "model": "text-embedding-3-small"}' | head -c 500
-```
-
-This should return a JSON response with embedding vectors (status 200).
-
-**Compare with the broken OpenAI-compatible path** (`/openai/v1` — returns 404):
+**Test chat completions** (via the AI Foundry project endpoint):
 
 ```bash
-curl -s -w "\nHTTP Status: %{http_code}\n" "${ENDPOINT}/openai/v1/embeddings?api-version=${API_VERSION}" \
-  -H "Authorization: Bearer ${TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{"input": ["hello world"], "model": "text-embedding-3-small"}'
-```
-
-This will return `HTTP Status: 404` — this is the [known Azure service limitation](https://github.com/Azure/azure-sdk-for-python/issues/44532) that mem0 works around.
-
-**Test chat completions** (works on both paths, for comparison):
-
-```bash
-curl -s "${ENDPOINT}/openai/v1/chat/completions?api-version=${API_VERSION}" \
+curl -s "${ENDPOINT}/openai/v1/chat/completions?api-version=2024-05-01-preview" \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "Say hello"}], "max_tokens": 50}' | head -c 500
 ```
 
-> **Note:** The token scope must be `https://ai.azure.com/.default` for AI Foundry project endpoints (`*.services.ai.azure.com`). Using other scopes (e.g. `https://cognitiveservices.azure.com/.default`) will result in a 401 "audience is incorrect" error.
+**Test embeddings** (via the connected Azure OpenAI / Cognitive Services endpoint):
+
+> **Note:** AI Foundry project endpoints (`*.services.ai.azure.com`) do **not** expose an embeddings route — all paths (`/openai/v1/embeddings`, `/models/embeddings`) return 404. Embeddings must go through the connected Azure OpenAI resource on Cognitive Services. The `azure-ai-projects` SDK handles this automatically via `get_openai_client()`.
+
+```bash
+curl -s "${AOAI_ENDPOINT}/openai/deployments/text-embedding-3-small/embeddings?api-version=2023-05-15" \
+  -H "Authorization: Bearer ${AOAI_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"input": ["hello world"]}' | head -c 500
+```
+
+This should return a JSON response with embedding vectors (status 200).
+
+> **Note:** The token scope differs by endpoint type: use `https://ai.azure.com/.default` for AI Foundry project endpoints (`*.services.ai.azure.com`), and `https://cognitiveservices.azure.com/.default` for Azure OpenAI / Cognitive Services endpoints (`*.cognitiveservices.azure.com`).
 
 ---
 
