@@ -1,8 +1,21 @@
 import os
 from typing import Literal, Optional
 
-from azure.ai.projects import AIProjectClient
-from azure.identity import DefaultAzureCredential
+try:
+    from azure.ai.projects import AIProjectClient
+except ImportError:
+    raise ImportError(
+        "The 'azure-ai-projects' library is required. "
+        "Please install it using 'pip install azure-ai-projects>=2.0.0'."
+    )
+
+try:
+    from azure.identity import DefaultAzureCredential
+except ImportError:
+    raise ImportError(
+        "The 'azure-identity' library is required. "
+        "Please install it using 'pip install azure-identity>=1.24.0'."
+    )
 
 from mem0.configs.embeddings.base import BaseEmbedderConfig
 from mem0.embeddings.base import EmbeddingBase

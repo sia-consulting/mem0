@@ -2,9 +2,29 @@ import json
 import os
 from typing import Dict, List, Optional, Union
 
-from azure.ai.inference import ChatCompletionsClient
-from azure.core.credentials import AzureKeyCredential
-from azure.identity import DefaultAzureCredential
+try:
+    from azure.ai.inference import ChatCompletionsClient
+except ImportError:
+    raise ImportError(
+        "The 'azure-ai-inference' library is required. "
+        "Please install it using 'pip install azure-ai-inference>=1.0.0b9'."
+    )
+
+try:
+    from azure.core.credentials import AzureKeyCredential
+except ImportError:
+    raise ImportError(
+        "The 'azure-core' library is required. "
+        "Please install it using 'pip install azure-core'."
+    )
+
+try:
+    from azure.identity import DefaultAzureCredential
+except ImportError:
+    raise ImportError(
+        "The 'azure-identity' library is required. "
+        "Please install it using 'pip install azure-identity>=1.24.0'."
+    )
 
 from mem0.configs.llms.azure_foundry import AzureFoundryConfig
 from mem0.configs.llms.base import BaseLlmConfig
