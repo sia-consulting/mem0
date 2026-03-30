@@ -231,6 +231,7 @@ Instead of passing credentials in code, set these environment variables:
 | `AZURE_FOUNDRY_ENDPOINT` | Chat completion endpoint URL |
 | `AZURE_FOUNDRY_EMBEDDING_API_KEY` | API key for the embedding endpoint |
 | `AZURE_FOUNDRY_EMBEDDING_ENDPOINT` | Embedding endpoint URL |
+| `AZURE_FOUNDRY_API_VERSION` | API version override (e.g. `2024-05-01-preview`) |
 
 When API keys are omitted, the provider automatically uses [`DefaultAzureCredential`](https://learn.microsoft.com/en-us/python/api/azure-identity/azure.identity.defaultazurecredential) for passwordless auth (managed identity, Azure CLI, etc.).
 
@@ -261,6 +262,35 @@ config = {
 ```
 
 You can also set `AZURE_CLIENT_ID` for user-assigned managed identity (natively supported by `azure-identity`).
+
+### API Version
+
+The `azure-ai-inference` SDK sends an `api-version` query parameter with every request. The SDK default is `2024-05-01-preview`, but some Azure AI Foundry endpoint configurations (e.g. project-scoped endpoints) may not support it and return **400 "API version not supported"**.
+
+**Supported versions** are listed in the official Microsoft documentation:
+- [Azure AI Model Inference REST API reference](https://learn.microsoft.com/en-us/rest/api/aifoundry/modelinference/) — lists all supported `api-version` values
+- [azure-ai-inference changelog on PyPI](https://pypi.org/project/azure-ai-inference/#history) — shows which SDK version ships which default `api-version`
+
+To override the API version, set the `AZURE_FOUNDRY_API_VERSION` environment variable:
+
+```bash
+export AZURE_FOUNDRY_API_VERSION="2024-05-01-preview"
+```
+
+Or pass it in the config:
+
+```python
+config = {
+    "llm": {
+        "provider": "azure_foundry",
+        "config": {
+            "model": "gpt-4o",
+            "endpoint": "https://<resource>.services.ai.azure.com/models",
+            "api_version": "2024-05-01-preview",
+        },
+    },
+}
+```
 
 ### Embedding & LLM Model Compatibility
 
