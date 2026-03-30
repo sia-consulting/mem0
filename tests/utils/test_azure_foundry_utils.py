@@ -19,10 +19,10 @@ def test_openai_azure_endpoint():
     assert scopes == ["https://cognitiveservices.azure.com/.default"]
 
 
-def test_ai_foundry_endpoint_returns_none():
-    """AI Foundry endpoint should return cognitiveservices scope (not None)."""
+def test_ai_foundry_endpoint_returns_ai_scope():
+    """AI Foundry endpoint should return ai.azure.com scope."""
     scopes = get_credential_scopes("https://myresource.services.ai.azure.com/models")
-    assert scopes == ["https://cognitiveservices.azure.com/.default"]
+    assert scopes == ["https://ai.azure.com/.default"]
 
 
 def test_explicit_scopes_override():
@@ -37,7 +37,7 @@ def test_explicit_scopes_override():
 
 def test_explicit_scopes_override_for_foundry_endpoint():
     """Explicit scopes should override even for AI Foundry endpoints."""
-    custom = ["https://cognitiveservices.azure.com/.default"]
+    custom = ["https://custom.scope/.default"]
     scopes = get_credential_scopes(
         "https://myresource.services.ai.azure.com/models", custom
     )
