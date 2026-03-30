@@ -56,7 +56,15 @@ class AzureFoundryProjectsEmbedding(EmbeddingBase):
             credential=credential,
         )
 
-        self.client = project_client.get_openai_client()
+        # Use the Azure AI Model Inference API path (/models) instead of the
+        # default OpenAI-compatible path (/openai/v1).  The project inference
+        # gateway exposes /openai/v1/chat/completions but does NOT expose
+        # /openai/v1/embeddings, resulting in a 404 error.  Routing through
+        # /models/embeddings uses the Model Inference API which supports
+        # embeddings via model routing (model name in the request body).
+        # See: https://github.com/Azure/azure-sdk-for-python/issues/44532
+        models_base_url = endpoint.rstrip("/") + "/models"
+        self.client = project_client.get_openai_client(base_url=models_base_url)
 
     def embed(self, text, memory_action: Optional[Literal["add", "search", "update"]] = None):
         """
