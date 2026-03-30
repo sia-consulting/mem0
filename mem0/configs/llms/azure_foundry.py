@@ -29,6 +29,7 @@ class AzureFoundryConfig(BaseLlmConfig):
         endpoint: Optional[str] = None,
         managed_identity_client_id: Optional[str] = None,
         credential_scopes: Optional[List[str]] = None,
+        api_version: Optional[str] = None,
     ):
         """
         Initialize Azure AI Foundry configuration.
@@ -53,6 +54,11 @@ class AzureFoundryConfig(BaseLlmConfig):
                 None, the scope is auto-detected from the endpoint URL. Explicitly
                 set this to override auto-detection (e.g.,
                 ["https://cognitiveservices.azure.com/.default"]).
+            api_version: Azure API version to use for requests. When None, the
+                azure-ai-inference SDK default is used. Override this if the
+                endpoint returns "API version not supported" (e.g.,
+                "2025-03-01-preview"). Can also be set via the
+                AZURE_FOUNDRY_API_VERSION environment variable.
         """
         super().__init__(
             model=model,
@@ -69,3 +75,4 @@ class AzureFoundryConfig(BaseLlmConfig):
         self.endpoint = endpoint
         self.managed_identity_client_id = managed_identity_client_id
         self.credential_scopes = credential_scopes
+        self.api_version = api_version

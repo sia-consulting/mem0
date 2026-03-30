@@ -394,3 +394,87 @@ def test_init_api_key_auth_no_credential_scopes(monkeypatch):
             endpoint=cog_endpoint,
             credential="mock-credential",
         )
+
+
+def test_init_with_api_version_from_config(monkeypatch):
+    """api_version from config should be passed to ChatCompletionsClient."""
+    monkeypatch.delenv("AZURE_FOUNDRY_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_FOUNDRY_API_VERSION", raising=False)
+    config = AzureFoundryConfig(
+        model=MODEL, api_key=API_KEY, endpoint=ENDPOINT, api_version="2025-03-01-preview",
+    )
+
+    with (
+        patch("mem0.llms.azure_foundry.ChatCompletionsClient") as mock_client_cls,
+        patch("mem0.llms.azure_foundry.AzureKeyCredential") as mock_cred,
+    ):
+        mock_cred.return_value = "mock-credential"
+        AzureFoundryLLM(config)
+        mock_client_cls.assert_called_once_with(
+            endpoint=ENDPOINT,
+            credential="mock-credential",
+            api_version="2025-03-01-preview",
+        )
+
+
+def test_init_with_api_version_from_env_var(monkeypatch):
+    """AZURE_FOUNDRY_API_VERSION env var should be passed to ChatCompletionsClient."""
+    monkeypatch.delenv("AZURE_FOUNDRY_API_KEY", raising=False)
+    monkeypatch.setenv("AZURE_FOUNDRY_API_VERSION", "2025-01-01-preview")
+    config = AzureFoundryConfig(
+        model=MODEL, api_key=API_KEY, endpoint=ENDPOINT,
+    )
+
+    with (
+        patch("mem0.llms.azure_foundry.ChatCompletionsClient") as mock_client_cls,
+        patch("mem0.llms.azure_foundry.AzureKeyCredential") as mock_cred,
+    ):
+        mock_cred.return_value = "mock-credential"
+        AzureFoundryLLM(config)
+        mock_client_cls.assert_called_once_with(
+            endpoint=ENDPOINT,
+            credential="mock-credential",
+            api_version="2025-01-01-preview",
+        )
+
+
+def test_init_api_version_config_takes_precedence_over_env_var(monkeypatch):
+    """Config api_version should take precedence over AZURE_FOUNDRY_API_VERSION env var."""
+    monkeypatch.delenv("AZURE_FOUNDRY_API_KEY", raising=False)
+    monkeypatch.setenv("AZURE_FOUNDRY_API_VERSION", "env-version")
+    config = AzureFoundryConfig(
+        model=MODEL, api_key=API_KEY, endpoint=ENDPOINT, api_version="config-version",
+    )
+
+    with (
+        patch("mem0.llms.azure_foundry.ChatCompletionsClient") as mock_client_cls,
+        patch("mem0.llms.azure_foundry.AzureKeyCredential") as mock_cred,
+    ):
+        mock_cred.return_value = "mock-credential"
+        AzureFoundryLLM(config)
+        mock_client_cls.assert_called_once_with(
+            endpoint=ENDPOINT,
+            credential="mock-credential",
+            api_version="config-version",
+        )
+
+
+def test_init_no_api_version_uses_sdk_default(monkeypatch):
+    """When api_version is not set, it should not be passed to the client (SDK default used)."""
+    monkeypatch.delenv("AZURE_FOUNDRY_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_FOUNDRY_API_VERSION", raising=False)
+    config = AzureFoundryConfig(
+        model=MODEL, api_key=API_KEY, endpoint=ENDPOINT,
+    )
+
+    with (
+        patch("mem0.llms.azure_foundry.ChatCompletionsClient") as mock_client_cls,
+        patch("mem0.llms.azure_foundry.AzureKeyCredential") as mock_cred,
+    ):
+        mock_cred.return_value = "mock-credential"
+        AzureFoundryLLM(config)
+        # No api_version kwarg should be passed
+        mock_client_cls.assert_called_once_with(
+            endpoint=ENDPOINT,
+            credential="mock-credential",
+        )

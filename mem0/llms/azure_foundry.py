@@ -60,6 +60,14 @@ class AzureFoundryLLM(LLMBase):
         # To specify a user-assigned managed identity, set managed_identity_client_id in
         # config or the AZURE_CLIENT_ID env var (used as fallback).
         client_kwargs = {}
+
+        # Allow overriding the API version sent to the Azure endpoint.
+        # The azure-ai-inference SDK defaults to "2024-05-01-preview" which may
+        # not be supported by all Azure AI Foundry endpoint configurations.
+        api_version = getattr(self.config, "api_version", None) or os.getenv("AZURE_FOUNDRY_API_VERSION")
+        if api_version:
+            client_kwargs["api_version"] = api_version
+
         if api_key is None or api_key == "" or api_key == "your-api-key":
             managed_identity_client_id = (
                 self.config.managed_identity_client_id or os.getenv("AZURE_CLIENT_ID")
