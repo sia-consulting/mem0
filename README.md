@@ -149,7 +149,7 @@ This fork adds an **Azure AI Foundry** provider for both LLM and embeddings, pow
 Install from the fork's GitHub Packages (replace `TOKEN` with your GitHub PAT):
 
 ```bash
-pip install mem0ai --extra-index-url https://TOKEN@ghp.pkg.github.com/sia-consulting/mem0/simple/
+pip install mem0ai --extra-index-url https://TOKEN@pypi.pkg.github.com/sia-consulting/mem0/simple/
 ```
 
 Or install the extra dependencies for Azure AI Foundry support on any mem0 install:
