@@ -20,9 +20,9 @@ def test_openai_azure_endpoint():
 
 
 def test_ai_foundry_endpoint_returns_none():
-    """AI Foundry endpoint should return None (SDK uses its default)."""
+    """AI Foundry endpoint should return cognitiveservices scope (not None)."""
     scopes = get_credential_scopes("https://myresource.services.ai.azure.com/models")
-    assert scopes is None
+    assert scopes == ["https://cognitiveservices.azure.com/.default"]
 
 
 def test_explicit_scopes_override():

@@ -58,11 +58,14 @@ class AzureFoundryLLM(LLMBase):
         # If the API key is not provided or is a placeholder, use DefaultAzureCredential
         # for passwordless authentication via managed identities, Azure CLI, etc.
         # To specify a user-assigned managed identity, set managed_identity_client_id in
-        # config or use the AZURE_CLIENT_ID env var (natively supported by azure-identity).
+        # config or the AZURE_CLIENT_ID env var (used as fallback).
         client_kwargs = {}
         if api_key is None or api_key == "" or api_key == "your-api-key":
+            managed_identity_client_id = (
+                self.config.managed_identity_client_id or os.getenv("AZURE_CLIENT_ID")
+            )
             credential = DefaultAzureCredential(
-                managed_identity_client_id=self.config.managed_identity_client_id,
+                managed_identity_client_id=managed_identity_client_id,
             )
             # The azure-ai-inference SDK defaults credential_scopes to
             # ["https://ml.azure.com/.default"], which is incorrect for

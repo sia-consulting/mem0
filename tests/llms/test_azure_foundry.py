@@ -204,6 +204,7 @@ def test_init_missing_endpoint(monkeypatch):
 def test_init_missing_api_key_uses_default_credential(monkeypatch):
     """When no API key is provided, DefaultAzureCredential is used for managed identity auth."""
     monkeypatch.delenv("AZURE_FOUNDRY_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
     config = AzureFoundryConfig(model=MODEL, endpoint=ENDPOINT)
 
     with (
@@ -216,6 +217,7 @@ def test_init_missing_api_key_uses_default_credential(monkeypatch):
         mock_client_cls.assert_called_once_with(
             endpoint=ENDPOINT,
             credential=mock_cred_instance,
+            credential_scopes=["https://cognitiveservices.azure.com/.default"],
         )
         assert llm.config.model == MODEL
 
@@ -223,6 +225,7 @@ def test_init_missing_api_key_uses_default_credential(monkeypatch):
 def test_init_with_placeholder_api_key_uses_default_credential(monkeypatch):
     """Placeholder API key should trigger DefaultAzureCredential."""
     monkeypatch.delenv("AZURE_FOUNDRY_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
     config = AzureFoundryConfig(model=MODEL, api_key="your-api-key", endpoint=ENDPOINT)
 
     with (
@@ -235,12 +238,14 @@ def test_init_with_placeholder_api_key_uses_default_credential(monkeypatch):
         mock_client_cls.assert_called_once_with(
             endpoint=ENDPOINT,
             credential=mock_cred_instance,
+            credential_scopes=["https://cognitiveservices.azure.com/.default"],
         )
 
 
 def test_init_with_empty_api_key_uses_default_credential(monkeypatch):
     """Empty API key should trigger DefaultAzureCredential."""
     monkeypatch.delenv("AZURE_FOUNDRY_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
     config = AzureFoundryConfig(model=MODEL, api_key="", endpoint=ENDPOINT)
 
     with (
@@ -253,12 +258,14 @@ def test_init_with_empty_api_key_uses_default_credential(monkeypatch):
         mock_client_cls.assert_called_once_with(
             endpoint=ENDPOINT,
             credential=mock_cred_instance,
+            credential_scopes=["https://cognitiveservices.azure.com/.default"],
         )
 
 
 def test_init_with_managed_identity_client_id(monkeypatch):
     """User-assigned managed identity client ID should be passed to DefaultAzureCredential."""
     monkeypatch.delenv("AZURE_FOUNDRY_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
     client_id = "12345678-1234-1234-1234-123456789abc"
     config = AzureFoundryConfig(
         model=MODEL, endpoint=ENDPOINT, managed_identity_client_id=client_id,
@@ -274,7 +281,39 @@ def test_init_with_managed_identity_client_id(monkeypatch):
         mock_client_cls.assert_called_once_with(
             endpoint=ENDPOINT,
             credential=mock_cred_instance,
+            credential_scopes=["https://cognitiveservices.azure.com/.default"],
         )
+
+
+def test_init_azure_client_id_env_var_fallback(monkeypatch):
+    """AZURE_CLIENT_ID env var should be used when managed_identity_client_id is not in config."""
+    monkeypatch.delenv("AZURE_FOUNDRY_API_KEY", raising=False)
+    monkeypatch.setenv("AZURE_CLIENT_ID", "env-client-id-1234")
+    config = AzureFoundryConfig(model=MODEL, endpoint=ENDPOINT)
+
+    with (
+        patch("mem0.llms.azure_foundry.ChatCompletionsClient"),
+        patch("mem0.llms.azure_foundry.DefaultAzureCredential") as mock_cred,
+    ):
+        AzureFoundryLLM(config)
+        mock_cred.assert_called_once_with(managed_identity_client_id="env-client-id-1234")
+
+
+def test_init_config_client_id_takes_precedence_over_env_var(monkeypatch):
+    """Config managed_identity_client_id should take precedence over AZURE_CLIENT_ID env var."""
+    monkeypatch.delenv("AZURE_FOUNDRY_API_KEY", raising=False)
+    monkeypatch.setenv("AZURE_CLIENT_ID", "env-client-id")
+    config_id = "config-client-id-5678"
+    config = AzureFoundryConfig(
+        model=MODEL, endpoint=ENDPOINT, managed_identity_client_id=config_id,
+    )
+
+    with (
+        patch("mem0.llms.azure_foundry.ChatCompletionsClient"),
+        patch("mem0.llms.azure_foundry.DefaultAzureCredential") as mock_cred,
+    ):
+        AzureFoundryLLM(config)
+        mock_cred.assert_called_once_with(managed_identity_client_id=config_id)
 
 
 def test_init_cognitive_services_endpoint_sets_credential_scopes(monkeypatch):
@@ -297,8 +336,9 @@ def test_init_cognitive_services_endpoint_sets_credential_scopes(monkeypatch):
 
 
 def test_init_ai_foundry_endpoint_uses_sdk_default_scopes(monkeypatch):
-    """AI Foundry endpoints (*.services.ai.azure.com) should use SDK default scopes."""
+    """AI Foundry endpoints (*.services.ai.azure.com) should use cognitiveservices scope."""
     monkeypatch.delenv("AZURE_FOUNDRY_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
     config = AzureFoundryConfig(model=MODEL, endpoint=ENDPOINT)
 
     with (
@@ -307,10 +347,10 @@ def test_init_ai_foundry_endpoint_uses_sdk_default_scopes(monkeypatch):
     ):
         mock_cred_instance = mock_cred.return_value
         AzureFoundryLLM(config)
-        # No credential_scopes kwarg → SDK uses its default
         mock_client_cls.assert_called_once_with(
             endpoint=ENDPOINT,
             credential=mock_cred_instance,
+            credential_scopes=["https://cognitiveservices.azure.com/.default"],
         )
 
 
