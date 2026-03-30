@@ -156,7 +156,14 @@ For detailed integration steps, see the [Quickstart](https://docs.mem0.ai/quicks
 
 ## ☁️ Azure AI Foundry Setup (sia-consulting fork)
 
-This fork adds an **Azure AI Foundry** provider for both LLM and embeddings, powered by the [`azure-ai-inference`](https://pypi.org/project/azure-ai-inference/) SDK. It works with **any model** deployed to Azure AI Foundry — including OpenAI (GPT-4o, GPT-4.1), Anthropic (Claude), Meta (Llama), Mistral, and more.
+This fork adds **Azure AI Foundry** providers for both LLM and embeddings. Two provider variants are available:
+
+| Provider | SDK | Auth | Endpoint format |
+|---|---|---|---|
+| `azure_foundry` | [`azure-ai-inference`](https://pypi.org/project/azure-ai-inference/) | API key **or** managed identity | `https://<resource>.services.ai.azure.com/models` |
+| `azure_foundry_projects` | [`azure-ai-projects`](https://pypi.org/project/azure-ai-projects/) | Managed identity (Entra ID) only | `https://<resource>.services.ai.azure.com/api/projects/<project>` |
+
+Both work with **any model** deployed to Azure AI Foundry — including OpenAI (GPT-4o, GPT-4.1), Anthropic (Claude), Meta (Llama), Mistral, and more. Use `azure_foundry_projects` when you have an Azure AI Foundry **project** endpoint — it handles authentication, routing, and credential scopes automatically via the [`AIProjectClient`](https://learn.microsoft.com/en-us/python/api/overview/azure/ai-projects-readme).
 
 ### Installation
 
@@ -176,6 +183,12 @@ Or install the extra dependencies for Azure AI Foundry support on any mem0 insta
 
 ```bash
 pip install "azure-ai-inference>=1.0.0b9" "azure-identity>=1.24.0"
+```
+
+For the `azure_foundry_projects` provider, also install:
+
+```bash
+pip install "azure-ai-projects>=2.0.0"
 ```
 
 ### Prerequisites
@@ -356,6 +369,53 @@ results = memory.search(query="What editor does Alice use?", user_id="alice")
 for r in results["results"]:
     print(r["memory"])
 ```
+
+### Azure AI Foundry Projects Provider (`azure_foundry_projects`)
+
+If you have an Azure AI Foundry **project** endpoint (URL contains `/api/projects/`), use the `azure_foundry_projects` provider. It uses the [`azure-ai-projects`](https://pypi.org/project/azure-ai-projects/) SDK's `AIProjectClient`, which handles endpoint routing, authentication, and credential scopes automatically.
+
+> **Note:** This provider only supports Entra ID authentication (managed identity / Azure CLI). API key auth is not supported — use `azure_foundry` for API key auth.
+
+#### Configuration
+
+```python
+from mem0 import Memory
+
+config = {
+    "llm": {
+        "provider": "azure_foundry_projects",
+        "config": {
+            "model": "gpt-4o",                  # deployment name
+            "endpoint": "https://<resource>.services.ai.azure.com/api/projects/<project>",
+            "managed_identity_client_id": "...", # optional, for user-assigned MI
+        },
+    },
+    "embedder": {
+        "provider": "azure_foundry_projects",
+        "config": {
+            "model": "text-embedding-3-small",   # deployment name
+            "openai_base_url": "https://<resource>.services.ai.azure.com/api/projects/<project>",
+            "embedding_dims": 1536,
+        },
+    },
+    "vector_store": {
+        "provider": "qdrant",
+        "config": {
+            "embedding_model_dims": 1536,
+            "path": "/tmp/mem0_qdrant",
+        },
+    },
+}
+
+memory = Memory.from_config(config)
+```
+
+#### Environment Variables
+
+| Variable | Description |
+|---|---|
+| `AZURE_AI_PROJECT_ENDPOINT` | Azure AI Foundry project endpoint URL |
+| `AZURE_CLIENT_ID` | Client ID for user-assigned managed identity (optional) |
 
 ---
 
