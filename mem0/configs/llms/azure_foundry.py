@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import List, Optional
 
 from mem0.configs.llms.base import BaseLlmConfig
 
@@ -28,6 +28,7 @@ class AzureFoundryConfig(BaseLlmConfig):
         # Azure AI Foundry-specific parameters
         endpoint: Optional[str] = None,
         managed_identity_client_id: Optional[str] = None,
+        credential_scopes: Optional[List[str]] = None,
     ):
         """
         Initialize Azure AI Foundry configuration.
@@ -48,6 +49,10 @@ class AzureFoundryConfig(BaseLlmConfig):
             managed_identity_client_id: Client ID of a user-assigned managed identity
                 to use with DefaultAzureCredential. Only used when api_key is not
                 provided. Defaults to None (system-assigned identity).
+            credential_scopes: OAuth token scopes for managed identity auth. When
+                None, the scope is auto-detected from the endpoint URL. Explicitly
+                set this to override auto-detection (e.g.,
+                ["https://cognitiveservices.azure.com/.default"]).
         """
         super().__init__(
             model=model,
@@ -63,3 +68,4 @@ class AzureFoundryConfig(BaseLlmConfig):
 
         self.endpoint = endpoint
         self.managed_identity_client_id = managed_identity_client_id
+        self.credential_scopes = credential_scopes
