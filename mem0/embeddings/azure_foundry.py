@@ -7,6 +7,7 @@ from azure.identity import DefaultAzureCredential
 
 from mem0.configs.embeddings.base import BaseEmbedderConfig
 from mem0.embeddings.base import EmbeddingBase
+from mem0.utils.azure_foundry import get_credential_scopes
 
 
 class AzureFoundryEmbedding(EmbeddingBase):
@@ -35,16 +36,28 @@ class AzureFoundryEmbedding(EmbeddingBase):
         # for passwordless authentication via managed identities, Azure CLI, etc.
         # To specify a user-assigned managed identity, set managed_identity_client_id in
         # config or use the AZURE_CLIENT_ID env var (natively supported by azure-identity).
+        client_kwargs = {}
         if api_key is None or api_key == "" or api_key == "your-api-key":
             credential = DefaultAzureCredential(
                 managed_identity_client_id=self.config.managed_identity_client_id,
             )
+            # The azure-ai-inference SDK defaults credential_scopes to
+            # ["https://ml.azure.com/.default"], which is incorrect for
+            # Cognitive Services endpoints (*.cognitiveservices.azure.com).
+            # Auto-detect the correct scope from the endpoint URL, or use an
+            # explicit override from config.
+            scopes = get_credential_scopes(
+                endpoint, getattr(self.config, "credential_scopes", None)
+            )
+            if scopes:
+                client_kwargs["credential_scopes"] = scopes
         else:
             credential = AzureKeyCredential(api_key)
 
         self.client = EmbeddingsClient(
             endpoint=endpoint,
             credential=credential,
+            **client_kwargs,
         )
 
     def embed(self, text, memory_action: Optional[Literal["add", "search", "update"]] = None):

@@ -1,0 +1,28 @@
+from typing import List, Optional
+
+
+def get_credential_scopes(endpoint: str, config_scopes: Optional[List[str]] = None) -> Optional[List[str]]:
+    """
+    Determine the correct OAuth credential scopes for an Azure endpoint.
+
+    The azure-ai-inference SDK defaults to ["https://ml.azure.com/.default"]
+    which only works for AI Foundry (*.services.ai.azure.com) endpoints.
+    Cognitive Services endpoints (*.cognitiveservices.azure.com) and Azure
+    OpenAI endpoints (*.openai.azure.com) require a different scope.
+
+    Args:
+        endpoint: The Azure endpoint URL.
+        config_scopes: Explicit scopes from user configuration. When provided,
+            these take precedence over auto-detection.
+
+    Returns:
+        A list of scope strings, or None to use the SDK default.
+    """
+    if config_scopes:
+        return config_scopes
+
+    endpoint_lower = endpoint.lower()
+    if "cognitiveservices.azure.com" in endpoint_lower or "openai.azure.com" in endpoint_lower:
+        return ["https://cognitiveservices.azure.com/.default"]
+
+    return None

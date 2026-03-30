@@ -275,3 +275,82 @@ def test_init_with_managed_identity_client_id(monkeypatch):
             endpoint=ENDPOINT,
             credential=mock_cred_instance,
         )
+
+
+def test_init_cognitive_services_endpoint_sets_credential_scopes(monkeypatch):
+    """Cognitive Services endpoints should auto-detect the correct credential scope."""
+    monkeypatch.delenv("AZURE_FOUNDRY_API_KEY", raising=False)
+    cog_endpoint = "https://myresource.cognitiveservices.azure.com/models"
+    config = AzureFoundryConfig(model=MODEL, endpoint=cog_endpoint)
+
+    with (
+        patch("mem0.llms.azure_foundry.ChatCompletionsClient") as mock_client_cls,
+        patch("mem0.llms.azure_foundry.DefaultAzureCredential") as mock_cred,
+    ):
+        mock_cred_instance = mock_cred.return_value
+        AzureFoundryLLM(config)
+        mock_client_cls.assert_called_once_with(
+            endpoint=cog_endpoint,
+            credential=mock_cred_instance,
+            credential_scopes=["https://cognitiveservices.azure.com/.default"],
+        )
+
+
+def test_init_ai_foundry_endpoint_uses_sdk_default_scopes(monkeypatch):
+    """AI Foundry endpoints (*.services.ai.azure.com) should use SDK default scopes."""
+    monkeypatch.delenv("AZURE_FOUNDRY_API_KEY", raising=False)
+    config = AzureFoundryConfig(model=MODEL, endpoint=ENDPOINT)
+
+    with (
+        patch("mem0.llms.azure_foundry.ChatCompletionsClient") as mock_client_cls,
+        patch("mem0.llms.azure_foundry.DefaultAzureCredential") as mock_cred,
+    ):
+        mock_cred_instance = mock_cred.return_value
+        AzureFoundryLLM(config)
+        # No credential_scopes kwarg → SDK uses its default
+        mock_client_cls.assert_called_once_with(
+            endpoint=ENDPOINT,
+            credential=mock_cred_instance,
+        )
+
+
+def test_init_explicit_credential_scopes_override(monkeypatch):
+    """Explicit credential_scopes in config should override auto-detection."""
+    monkeypatch.delenv("AZURE_FOUNDRY_API_KEY", raising=False)
+    custom_scopes = ["https://custom.scope/.default"]
+    config = AzureFoundryConfig(
+        model=MODEL, endpoint=ENDPOINT, credential_scopes=custom_scopes,
+    )
+
+    with (
+        patch("mem0.llms.azure_foundry.ChatCompletionsClient") as mock_client_cls,
+        patch("mem0.llms.azure_foundry.DefaultAzureCredential") as mock_cred,
+    ):
+        mock_cred_instance = mock_cred.return_value
+        AzureFoundryLLM(config)
+        mock_client_cls.assert_called_once_with(
+            endpoint=ENDPOINT,
+            credential=mock_cred_instance,
+            credential_scopes=custom_scopes,
+        )
+
+
+def test_init_api_key_auth_no_credential_scopes(monkeypatch):
+    """API key auth should not pass credential_scopes."""
+    monkeypatch.delenv("AZURE_FOUNDRY_API_KEY", raising=False)
+    cog_endpoint = "https://myresource.cognitiveservices.azure.com/models"
+    config = AzureFoundryConfig(
+        model=MODEL, api_key=API_KEY, endpoint=cog_endpoint,
+    )
+
+    with (
+        patch("mem0.llms.azure_foundry.ChatCompletionsClient") as mock_client_cls,
+        patch("mem0.llms.azure_foundry.AzureKeyCredential") as mock_cred,
+    ):
+        mock_cred.return_value = "mock-credential"
+        AzureFoundryLLM(config)
+        # API key auth should NOT pass credential_scopes
+        mock_client_cls.assert_called_once_with(
+            endpoint=cog_endpoint,
+            credential="mock-credential",
+        )

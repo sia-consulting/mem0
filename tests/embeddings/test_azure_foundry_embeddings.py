@@ -132,3 +132,61 @@ def test_init_with_managed_identity_client_id(monkeypatch):
             endpoint=ENDPOINT,
             credential=mock_cred_instance,
         )
+
+
+def test_init_cognitive_services_endpoint_sets_credential_scopes(monkeypatch):
+    """Cognitive Services endpoints should auto-detect the correct credential scope."""
+    monkeypatch.delenv("AZURE_FOUNDRY_EMBEDDING_API_KEY", raising=False)
+    cog_endpoint = "https://myresource.cognitiveservices.azure.com/models"
+    config = BaseEmbedderConfig(model=MODEL, openai_base_url=cog_endpoint)
+
+    with (
+        patch("mem0.embeddings.azure_foundry.EmbeddingsClient") as mock_client_cls,
+        patch("mem0.embeddings.azure_foundry.DefaultAzureCredential") as mock_cred,
+    ):
+        mock_cred_instance = mock_cred.return_value
+        AzureFoundryEmbedding(config)
+        mock_client_cls.assert_called_once_with(
+            endpoint=cog_endpoint,
+            credential=mock_cred_instance,
+            credential_scopes=["https://cognitiveservices.azure.com/.default"],
+        )
+
+
+def test_init_ai_foundry_endpoint_uses_sdk_default_scopes(monkeypatch):
+    """AI Foundry endpoints (*.services.ai.azure.com) should use SDK default scopes."""
+    monkeypatch.delenv("AZURE_FOUNDRY_EMBEDDING_API_KEY", raising=False)
+    config = BaseEmbedderConfig(model=MODEL, openai_base_url=ENDPOINT)
+
+    with (
+        patch("mem0.embeddings.azure_foundry.EmbeddingsClient") as mock_client_cls,
+        patch("mem0.embeddings.azure_foundry.DefaultAzureCredential") as mock_cred,
+    ):
+        mock_cred_instance = mock_cred.return_value
+        AzureFoundryEmbedding(config)
+        # No credential_scopes kwarg → SDK uses its default
+        mock_client_cls.assert_called_once_with(
+            endpoint=ENDPOINT,
+            credential=mock_cred_instance,
+        )
+
+
+def test_init_api_key_auth_no_credential_scopes(monkeypatch):
+    """API key auth should not pass credential_scopes."""
+    monkeypatch.delenv("AZURE_FOUNDRY_EMBEDDING_API_KEY", raising=False)
+    cog_endpoint = "https://myresource.cognitiveservices.azure.com/models"
+    config = BaseEmbedderConfig(
+        model=MODEL, api_key=API_KEY, openai_base_url=cog_endpoint,
+    )
+
+    with (
+        patch("mem0.embeddings.azure_foundry.EmbeddingsClient") as mock_client_cls,
+        patch("mem0.embeddings.azure_foundry.AzureKeyCredential") as mock_cred,
+    ):
+        mock_cred.return_value = "mock-credential"
+        AzureFoundryEmbedding(config)
+        # API key auth should NOT pass credential_scopes
+        mock_client_cls.assert_called_once_with(
+            endpoint=cog_endpoint,
+            credential="mock-credential",
+        )
