@@ -1243,7 +1243,9 @@ class Memory(MemoryBase):
         new_metadata = deepcopy(metadata) if metadata is not None else {}
         new_metadata["data"] = data
         new_metadata["hash"] = hashlib.md5(data.encode()).hexdigest()
-        new_metadata["created_at"] = datetime.now(timezone.utc).isoformat()
+        if "created_at" not in new_metadata:
+            new_metadata["created_at"] = datetime.now(timezone.utc).isoformat()
+        new_metadata["updated_at"] = new_metadata["created_at"]
 
         self.vector_store.insert(
             vectors=[embeddings],
@@ -1256,6 +1258,7 @@ class Memory(MemoryBase):
             data,
             "ADD",
             created_at=new_metadata.get("created_at"),
+            updated_at=new_metadata.get("updated_at"),
             actor_id=new_metadata.get("actor_id"),
             role=new_metadata.get("role"),
         )
@@ -1329,7 +1332,7 @@ class Memory(MemoryBase):
             new_metadata["agent_id"] = existing_memory.payload["agent_id"]
         if "run_id" not in new_metadata and "run_id" in existing_memory.payload:
             new_metadata["run_id"] = existing_memory.payload["run_id"]
-        if "actor_id" not in new_metadata and "actor_id" in existing_memory.payload:
+        if "actor_id" in existing_memory.payload:
             new_metadata["actor_id"] = existing_memory.payload["actor_id"]
         if "role" not in new_metadata and "role" in existing_memory.payload:
             new_metadata["role"] = existing_memory.payload["role"]
@@ -2372,7 +2375,9 @@ class AsyncMemory(MemoryBase):
         new_metadata = deepcopy(metadata) if metadata is not None else {}
         new_metadata["data"] = data
         new_metadata["hash"] = hashlib.md5(data.encode()).hexdigest()
-        new_metadata["created_at"] = datetime.now(timezone.utc).isoformat()
+        if "created_at" not in new_metadata:
+            new_metadata["created_at"] = datetime.now(timezone.utc).isoformat()
+        new_metadata["updated_at"] = new_metadata["created_at"]
 
         await asyncio.to_thread(
             self.vector_store.insert,
@@ -2388,6 +2393,7 @@ class AsyncMemory(MemoryBase):
             data,
             "ADD",
             created_at=new_metadata.get("created_at"),
+            updated_at=new_metadata.get("updated_at"),
             actor_id=new_metadata.get("actor_id"),
             role=new_metadata.get("role"),
         )
@@ -2477,7 +2483,7 @@ class AsyncMemory(MemoryBase):
         if "run_id" not in new_metadata and "run_id" in existing_memory.payload:
             new_metadata["run_id"] = existing_memory.payload["run_id"]
 
-        if "actor_id" not in new_metadata and "actor_id" in existing_memory.payload:
+        if "actor_id" in existing_memory.payload:
             new_metadata["actor_id"] = existing_memory.payload["actor_id"]
         if "role" not in new_metadata and "role" in existing_memory.payload:
             new_metadata["role"] = existing_memory.payload["role"]
