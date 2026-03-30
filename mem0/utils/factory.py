@@ -6,6 +6,7 @@ from mem0.configs.llms.anthropic import AnthropicConfig
 from mem0.configs.llms.aws_bedrock import AWSBedrockConfig
 from mem0.configs.llms.azure import AzureOpenAIConfig
 from mem0.configs.llms.azure_foundry import AzureFoundryConfig
+from mem0.configs.llms.azure_foundry_projects import AzureFoundryProjectsConfig
 from mem0.configs.llms.base import BaseLlmConfig
 from mem0.configs.llms.deepseek import DeepSeekConfig
 from mem0.configs.llms.minimax import MinimaxConfig
@@ -44,6 +45,7 @@ class LlmFactory:
         "litellm": ("mem0.llms.litellm.LiteLLM", BaseLlmConfig),
         "azure_openai": ("mem0.llms.azure_openai.AzureOpenAILLM", AzureOpenAIConfig),
         "azure_foundry": ("mem0.llms.azure_foundry.AzureFoundryLLM", AzureFoundryConfig),
+        "azure_foundry_projects": ("mem0.llms.azure_foundry_projects.AzureFoundryProjectsLLM", AzureFoundryProjectsConfig),
         "openai_structured": ("mem0.llms.openai_structured.OpenAIStructuredLLM", OpenAIConfig),
         "anthropic": ("mem0.llms.anthropic.AnthropicLLM", AnthropicConfig),
         "azure_openai_structured": ("mem0.llms.azure_openai_structured.AzureOpenAIStructuredLLM", AzureOpenAIConfig),
@@ -145,6 +147,7 @@ class EmbedderFactory:
         "huggingface": "mem0.embeddings.huggingface.HuggingFaceEmbedding",
         "azure_openai": "mem0.embeddings.azure_openai.AzureOpenAIEmbedding",
         "azure_foundry": "mem0.embeddings.azure_foundry.AzureFoundryEmbedding",
+        "azure_foundry_projects": "mem0.embeddings.azure_foundry_projects.AzureFoundryProjectsEmbedding",
         "gemini": "mem0.embeddings.gemini.GoogleGenAIEmbedding",
         "vertexai": "mem0.embeddings.vertexai.VertexAIEmbedding",
         "together": "mem0.embeddings.together.TogetherEmbedding",

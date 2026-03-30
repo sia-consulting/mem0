@@ -20,6 +20,7 @@ class LlmConfig(BaseModel):
             "litellm",
             "azure_openai",
             "azure_foundry",
+            "azure_foundry_projects",
             "openai_structured",
             "azure_openai_structured",
             "gemini",

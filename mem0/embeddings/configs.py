@@ -19,6 +19,7 @@ class EmbedderConfig(BaseModel):
             "huggingface",
             "azure_openai",
             "azure_foundry",
+            "azure_foundry_projects",
             "gemini",
             "vertexai",
             "together",
