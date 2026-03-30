@@ -1,4 +1,5 @@
 from typing import List, Optional
+from urllib.parse import urlparse
 
 
 def get_credential_scopes(endpoint: str, config_scopes: Optional[List[str]] = None) -> Optional[List[str]]:
@@ -21,8 +22,8 @@ def get_credential_scopes(endpoint: str, config_scopes: Optional[List[str]] = No
     if config_scopes:
         return config_scopes
 
-    endpoint_lower = endpoint.lower()
-    if "cognitiveservices.azure.com" in endpoint_lower or "openai.azure.com" in endpoint_lower:
+    host = urlparse(endpoint).hostname or ""
+    if host.endswith(".cognitiveservices.azure.com") or host.endswith(".openai.azure.com"):
         return ["https://cognitiveservices.azure.com/.default"]
 
     return None
