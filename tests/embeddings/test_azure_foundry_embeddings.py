@@ -261,9 +261,10 @@ def test_cog_endpoint_uses_azure_openai_with_managed_identity(monkeypatch):
     config = BaseEmbedderConfig(model=MODEL, openai_base_url=COG_ENDPOINT)
 
     with (
-        patch("mem0.embeddings.azure_foundry.OpenAI") as mock_aoai,
+        patch("mem0.embeddings.azure_foundry.OpenAI") as mock_openai,
         patch("mem0.embeddings.azure_foundry.DefaultAzureCredential") as mock_cred,
         patch("mem0.embeddings.azure_foundry.get_bearer_token_provider") as mock_token,
+        patch("mem0.embeddings.azure_foundry.httpx") as mock_httpx,
     ):
         mock_token.return_value = Mock(return_value="mock-token")
         embedder = AzureFoundryEmbedding(config)
@@ -272,9 +273,12 @@ def test_cog_endpoint_uses_azure_openai_with_managed_identity(monkeypatch):
             mock_cred.return_value,
             "https://cognitiveservices.azure.com/.default",
         )
-        mock_aoai.assert_called_once_with(
+        # Should use httpx event hook for token refresh, not a static api_key
+        mock_httpx.Client.assert_called_once()
+        mock_openai.assert_called_once_with(
             base_url="https://myresource.cognitiveservices.azure.com/openai/v1/",
-            api_key="mock-token",
+            api_key="token-managed-by-event-hook",
+            http_client=mock_httpx.Client.return_value,
         )
         assert embedder._use_openai_sdk is True
 
@@ -362,6 +366,7 @@ def test_cog_endpoint_managed_identity_client_id(monkeypatch):
         patch("mem0.embeddings.azure_foundry.OpenAI"),
         patch("mem0.embeddings.azure_foundry.DefaultAzureCredential") as mock_cred,
         patch("mem0.embeddings.azure_foundry.get_bearer_token_provider"),
+        patch("mem0.embeddings.azure_foundry.httpx"),
     ):
         AzureFoundryEmbedding(config)
         mock_cred.assert_called_once_with(managed_identity_client_id=client_id)

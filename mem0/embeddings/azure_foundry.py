@@ -1,6 +1,8 @@
 import os
 from typing import Literal, Optional
 
+import httpx
+
 try:
     from azure.ai.inference import EmbeddingsClient
 except ImportError:
@@ -94,13 +96,22 @@ class AzureFoundryEmbedding(EmbeddingBase):
                 credential = DefaultAzureCredential(
                     managed_identity_client_id=managed_identity_client_id,
                 )
-                scopes = get_credential_scopes(endpoint) or [
-                    "https://cognitiveservices.azure.com/.default"
-                ]
+                scopes = get_credential_scopes(endpoint)
                 token_provider = get_bearer_token_provider(credential, *scopes)
+
+                # Use an httpx event hook to refresh the bearer token on
+                # every request.  This avoids stale-token errors in
+                # long-running processes (tokens typically expire in ~60 min).
+                def _refresh_auth(request: httpx.Request) -> None:
+                    request.headers["authorization"] = f"Bearer {token_provider()}"
+
+                http_client = httpx.Client(
+                    event_hooks={"request": [_refresh_auth]},
+                )
                 self.client = OpenAI(
                     base_url=base_url,
-                    api_key=token_provider(),
+                    api_key="token-managed-by-event-hook",
+                    http_client=http_client,
                 )
         else:
             # ── AI Foundry endpoint ─────────────────────────────────────
