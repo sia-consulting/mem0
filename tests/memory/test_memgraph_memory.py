@@ -1,3 +1,4 @@
+import pytest
 from unittest.mock import MagicMock, Mock, patch
 
 # langchain_memgraph and rank_bm25 are optional deps — mock them so tests run without install
@@ -186,7 +187,6 @@ class TestStaleNodeReferenceHandling:
         instance.embedding_model.embed.return_value = [0.1, 0.2]
         instance.graph = MagicMock()
         instance.graph.query.side_effect = Exception("connection refused")
-        import pytest
         with pytest.raises(Exception, match="connection refused"):
             instance._search_graph_db(
                 node_list=["alice"], filters={"user_id": "u1"}
@@ -225,7 +225,6 @@ class TestStaleNodeReferenceHandling:
         instance = _make_instance()
         instance.graph = MagicMock()
         instance.graph.query.side_effect = Exception("connection refused")
-        import pytest
         with pytest.raises(Exception, match="connection refused"):
             instance._search_source_node(
                 source_embedding=[0.1, 0.2],
@@ -238,7 +237,6 @@ class TestStaleNodeReferenceHandling:
         instance = _make_instance()
         instance.graph = MagicMock()
         instance.graph.query.side_effect = Exception("connection refused")
-        import pytest
         with pytest.raises(Exception, match="connection refused"):
             instance._search_destination_node(
                 destination_embedding=[0.1, 0.2],

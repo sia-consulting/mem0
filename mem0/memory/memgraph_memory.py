@@ -25,6 +25,15 @@ from mem0.utils.factory import EmbedderFactory, LlmFactory
 
 logger = logging.getLogger(__name__)
 
+_STALE_NODE_PATTERNS = ("doesn't exist", "does not exist")
+
+
+def _is_stale_node_error(exc):
+    """Return True if *exc* is the Memgraph error raised when
+    ``vector_search.search`` returns a reference to a deleted node."""
+    msg = str(exc).lower()
+    return any(p in msg for p in _STALE_NODE_PATTERNS)
+
 
 class MemoryGraph:
     def __init__(self, config):
@@ -355,7 +364,7 @@ class MemoryGraph:
                 ans = self.graph.query(cypher_query, params=params)
                 result_relations.extend(ans)
             except Exception as e:
-                if "doesn't exist" in str(e):
+                if _is_stale_node_error(e):
                     logger.warning(f"Stale node reference in vector index during graph search: {e}")
                 else:
                     raise
@@ -597,7 +606,7 @@ class MemoryGraph:
         try:
             result = self.graph.query(cypher, params=params)
         except Exception as e:
-            if "doesn't exist" in str(e):
+            if _is_stale_node_error(e):
                 logger.warning(f"Stale node reference in vector index during source node search: {e}")
                 return []
             raise
@@ -642,7 +651,7 @@ class MemoryGraph:
         try:
             result = self.graph.query(cypher, params=params)
         except Exception as e:
-            if "doesn't exist" in str(e):
+            if _is_stale_node_error(e):
                 logger.warning(f"Stale node reference in vector index during destination node search: {e}")
                 return []
             raise
