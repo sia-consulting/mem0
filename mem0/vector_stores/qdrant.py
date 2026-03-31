@@ -34,6 +34,7 @@ class Qdrant(VectorStoreBase):
         url: str = None,
         api_key: str = None,
         on_disk: bool = False,
+        vector_name: str = None,
     ):
         """
         Initialize the Qdrant vector store.
@@ -49,6 +50,9 @@ class Qdrant(VectorStoreBase):
             api_key (str, optional): API key for Qdrant server. Defaults to None.
             on_disk (bool, optional): Enables persistent storage. Vectors are stored on disk (True) or in memory (False).
                 Does not delete the local database path. Defaults to False.
+            vector_name (str, optional): Named vector to use. Required when the collection uses named
+                vectors instead of the default unnamed vector. Auto-detected from existing collections
+                if not set. Defaults to None.
         """
         if client:
             self.client = client
@@ -74,6 +78,7 @@ class Qdrant(VectorStoreBase):
         self.collection_name = collection_name
         self.embedding_model_dims = embedding_model_dims
         self.on_disk = on_disk
+        self.vector_name = vector_name
         self.create_col(embedding_model_dims, on_disk)
 
     def create_col(self, vector_size: int, on_disk: bool, distance: Distance = Distance.COSINE):
@@ -90,14 +95,59 @@ class Qdrant(VectorStoreBase):
         for collection in response.collections:
             if collection.name == self.collection_name:
                 logger.debug(f"Collection {self.collection_name} already exists. Skipping creation.")
+                self._detect_vector_name()
                 self._create_filter_indexes()
                 return
 
+        if self.vector_name:
+            vectors_config = {self.vector_name: VectorParams(size=vector_size, distance=distance, on_disk=on_disk)}
+        else:
+            vectors_config = VectorParams(size=vector_size, distance=distance, on_disk=on_disk)
+
         self.client.create_collection(
             collection_name=self.collection_name,
-            vectors_config=VectorParams(size=vector_size, distance=distance, on_disk=on_disk),
+            vectors_config=vectors_config,
         )
         self._create_filter_indexes()
+
+    def _detect_vector_name(self):
+        """Auto-detect the vector name from an existing collection's configuration.
+
+        When the collection uses named vectors (vectors_config is a dict) and no
+        explicit vector_name was provided, this sets self.vector_name to the first
+        (or only) named vector.  If the collection uses a default unnamed vector
+        (vectors_config is a VectorParams), self.vector_name stays None.
+        """
+        try:
+            collection_info = self.client.get_collection(self.collection_name)
+            vectors_config = collection_info.config.params.vectors
+            if isinstance(vectors_config, dict):
+                # Collection uses named vectors
+                if self.vector_name is None:
+                    # Auto-detect: use the first named vector
+                    vector_names = list(vectors_config.keys())
+                    self.vector_name = vector_names[0]
+                    logger.info(
+                        f"Auto-detected named vector '{self.vector_name}' from collection "
+                        f"'{self.collection_name}'. Available vectors: {vector_names}"
+                    )
+                elif self.vector_name not in vectors_config:
+                    available = list(vectors_config.keys())
+                    logger.warning(
+                        f"Configured vector_name '{self.vector_name}' not found in collection "
+                        f"'{self.collection_name}'. Available vectors: {available}"
+                    )
+            else:
+                # Collection uses default unnamed vector
+                if self.vector_name is not None:
+                    logger.warning(
+                        f"vector_name '{self.vector_name}' was configured but collection "
+                        f"'{self.collection_name}' uses a default unnamed vector. "
+                        f"Ignoring vector_name."
+                    )
+                    self.vector_name = None
+        except Exception as e:
+            logger.debug(f"Could not detect vector configuration for collection '{self.collection_name}': {e}")
 
     def _create_filter_indexes(self):
         """Create indexes for commonly used filter fields to enable filtering."""
@@ -132,7 +182,7 @@ class Qdrant(VectorStoreBase):
         points = [
             PointStruct(
                 id=idx if ids is None else ids[idx],
-                vector=vector,
+                vector={self.vector_name: vector} if self.vector_name else vector,
                 payload=payloads[idx] if payloads else {},
             )
             for idx, vector in enumerate(vectors)
@@ -301,6 +351,7 @@ class Qdrant(VectorStoreBase):
             query=vectors,
             query_filter=query_filter,
             limit=limit,
+            using=self.vector_name,
         )
         return hits.points
 
@@ -328,7 +379,11 @@ class Qdrant(VectorStoreBase):
             payload (dict, optional): Updated payload. Defaults to None.
         """
         if vector is not None and payload is not None:
-            point = PointStruct(id=vector_id, vector=vector, payload=payload)
+            point = PointStruct(
+                id=vector_id,
+                vector={self.vector_name: vector} if self.vector_name else vector,
+                payload=payload,
+            )
             self.client.upsert(collection_name=self.collection_name, points=[point])
         else:
             if payload is not None:
@@ -338,9 +393,10 @@ class Qdrant(VectorStoreBase):
                     points=[vector_id],
                 )
             if vector is not None:
+                point_vector = {self.vector_name: vector} if self.vector_name else vector
                 self.client.update_vectors(
                     collection_name=self.collection_name,
-                    points=[PointVectors(id=vector_id, vector=vector)],
+                    points=[PointVectors(id=vector_id, vector=point_vector)],
                 )
 
     def get(self, vector_id: int) -> dict:
