@@ -622,11 +622,16 @@ class TestQdrantCollectionRetry(unittest.TestCase):
 
     def _make_404_response(self, collection_name="test_collection"):
         """Create a mock UnexpectedResponse for a missing collection."""
+        import json
         from qdrant_client.http.exceptions import UnexpectedResponse
+        content = json.dumps({
+            "status": {"error": f"Not found: Collection `{collection_name}` doesn't exist!"},
+            "time": 0.00001,
+        }).encode()
         return UnexpectedResponse(
             status_code=404,
             reason_phrase="Not Found",
-            content=f'{{"status":{{"error":"Not found: Collection `{collection_name}` doesn\'t exist!"}},"time":0.00001}}'.encode(),
+            content=content,
             headers={},
         )
 
