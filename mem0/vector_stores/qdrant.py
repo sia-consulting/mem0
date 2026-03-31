@@ -192,7 +192,7 @@ class Qdrant(VectorStoreBase):
         try:
             return operation()
         except UnexpectedResponse as e:
-            if e.status_code == 404 and b"doesn't exist" in e.content:
+            if e.status_code == 404 and self.collection_name.encode() in e.content:
                 logger.warning(
                     f"Collection '{self.collection_name}' was deleted externally. "
                     f"Recreating and retrying..."
@@ -201,7 +201,8 @@ class Qdrant(VectorStoreBase):
                 return operation()
             raise
         except ValueError as e:
-            if "not found" in str(e).lower():
+            msg = str(e).lower()
+            if self.collection_name.lower() in msg and "not found" in msg:
                 logger.warning(
                     f"Collection '{self.collection_name}' was deleted externally. "
                     f"Recreating and retrying..."
