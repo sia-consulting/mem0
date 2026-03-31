@@ -26,14 +26,11 @@ def get_openai_base_url(endpoint: str) -> str:
         https://<resource>.openai.azure.com/openai/v1/
         https://<resource>.cognitiveservices.azure.com/openai/v1
 
-    If the path already contains ``/openai/v1``, the URL is normalised
-    (trailing slash ensured) and returned as-is.  Otherwise
-    ``/openai/v1/`` is appended to the origin.
+    Always returns ``https://<host>/openai/v1/`` regardless of the input
+    path.  The ``/openai/v1/`` path is the OpenAI-compatible route that
+    Azure AI Foundry exposes on these endpoints.
     """
     parsed = urlparse(endpoint)
-    path = parsed.path.rstrip("/")
-    if path.endswith("/openai/v1"):
-        return f"{parsed.scheme}://{parsed.netloc}/openai/v1/"
     return f"{parsed.scheme}://{parsed.netloc}/openai/v1/"
 
 
