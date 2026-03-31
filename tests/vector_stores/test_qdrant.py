@@ -90,6 +90,7 @@ class TestQdrant(unittest.TestCase):
             query=vectors,
             query_filter=None,
             limit=1,
+            using=None,
         )
 
         self.assertEqual(len(results), 1)
@@ -361,6 +362,192 @@ class TestQdrant(unittest.TestCase):
 
     def tearDown(self):
         del self.qdrant
+
+
+class TestQdrantNamedVectors(unittest.TestCase):
+    """Tests for Qdrant named vector support."""
+
+    def test_default_vector_name_is_none(self):
+        """Without vector_name config, default is None (unnamed vector)."""
+        client_mock = MagicMock(spec=QdrantClient)
+        qdrant = Qdrant(
+            collection_name="test",
+            embedding_model_dims=128,
+            client=client_mock,
+        )
+        self.assertIsNone(qdrant.vector_name)
+
+    def test_explicit_vector_name_stored(self):
+        """Explicit vector_name is stored on the instance."""
+        client_mock = MagicMock(spec=QdrantClient)
+        qdrant = Qdrant(
+            collection_name="test",
+            embedding_model_dims=128,
+            client=client_mock,
+            vector_name="content",
+        )
+        self.assertEqual(qdrant.vector_name, "content")
+
+    def test_create_col_with_vector_name_uses_named_config(self):
+        """When vector_name is set, create_collection uses a dict vectors_config."""
+        client_mock = MagicMock(spec=QdrantClient)
+        client_mock.get_collections.return_value = MagicMock(collections=[])
+        qdrant = Qdrant(
+            collection_name="test",
+            embedding_model_dims=128,
+            client=client_mock,
+            vector_name="content",
+        )
+        client_mock.create_collection.assert_called_once_with(
+            collection_name="test",
+            vectors_config={"content": VectorParams(size=128, distance=Distance.COSINE, on_disk=False)},
+        )
+
+    def test_create_col_without_vector_name_uses_default_config(self):
+        """Without vector_name, create_collection uses VectorParams directly."""
+        client_mock = MagicMock(spec=QdrantClient)
+        client_mock.get_collections.return_value = MagicMock(collections=[])
+        qdrant = Qdrant(
+            collection_name="test",
+            embedding_model_dims=128,
+            client=client_mock,
+        )
+        client_mock.create_collection.assert_called_once_with(
+            collection_name="test",
+            vectors_config=VectorParams(size=128, distance=Distance.COSINE, on_disk=False),
+        )
+
+    def test_auto_detect_named_vector_from_existing_collection(self):
+        """Auto-detect vector name when collection uses named vectors."""
+        client_mock = MagicMock(spec=QdrantClient)
+        # Collection already exists
+        mock_col = MagicMock()
+        mock_col.name = "test"
+        client_mock.get_collections.return_value = MagicMock(collections=[mock_col])
+        # Collection info returns named vectors
+        mock_info = MagicMock()
+        mock_info.config.params.vectors = {
+            "content": VectorParams(size=128, distance=Distance.COSINE),
+        }
+        client_mock.get_collection.return_value = mock_info
+
+        qdrant = Qdrant(
+            collection_name="test",
+            embedding_model_dims=128,
+            client=client_mock,
+        )
+        self.assertEqual(qdrant.vector_name, "content")
+
+    def test_no_auto_detect_for_unnamed_vector_collection(self):
+        """Don't set vector_name when collection uses default unnamed vector."""
+        client_mock = MagicMock(spec=QdrantClient)
+        mock_col = MagicMock()
+        mock_col.name = "test"
+        client_mock.get_collections.return_value = MagicMock(collections=[mock_col])
+        mock_info = MagicMock()
+        mock_info.config.params.vectors = VectorParams(size=128, distance=Distance.COSINE)
+        client_mock.get_collection.return_value = mock_info
+
+        qdrant = Qdrant(
+            collection_name="test",
+            embedding_model_dims=128,
+            client=client_mock,
+        )
+        self.assertIsNone(qdrant.vector_name)
+
+    def test_search_passes_using_parameter(self):
+        """Search passes using=vector_name to query_points."""
+        client_mock = MagicMock(spec=QdrantClient)
+        qdrant = Qdrant(
+            collection_name="test",
+            embedding_model_dims=128,
+            client=client_mock,
+            vector_name="content",
+        )
+        client_mock.query_points.return_value = MagicMock(points=[])
+        qdrant.search(query="test", vectors=[0.1, 0.2], limit=5)
+        client_mock.query_points.assert_called_once_with(
+            collection_name="test",
+            query=[0.1, 0.2],
+            query_filter=None,
+            limit=5,
+            using="content",
+        )
+
+    def test_search_passes_using_none_without_vector_name(self):
+        """Search passes using=None when no vector_name is set."""
+        client_mock = MagicMock(spec=QdrantClient)
+        qdrant = Qdrant(
+            collection_name="test",
+            embedding_model_dims=128,
+            client=client_mock,
+        )
+        client_mock.query_points.return_value = MagicMock(points=[])
+        qdrant.search(query="test", vectors=[0.1, 0.2], limit=5)
+        client_mock.query_points.assert_called_once_with(
+            collection_name="test",
+            query=[0.1, 0.2],
+            query_filter=None,
+            limit=5,
+            using=None,
+        )
+
+    def test_insert_wraps_vectors_with_named_vector(self):
+        """Insert wraps vectors in dict when vector_name is set."""
+        client_mock = MagicMock(spec=QdrantClient)
+        qdrant = Qdrant(
+            collection_name="test",
+            embedding_model_dims=2,
+            client=client_mock,
+            vector_name="content",
+        )
+        vid = str(uuid.uuid4())
+        qdrant.insert(vectors=[[0.1, 0.2]], payloads=[{"k": "v"}], ids=[vid])
+        points = client_mock.upsert.call_args[1]["points"]
+        self.assertEqual(points[0].vector, {"content": [0.1, 0.2]})
+
+    def test_insert_uses_plain_vector_without_vector_name(self):
+        """Insert uses plain vector list when no vector_name is set."""
+        client_mock = MagicMock(spec=QdrantClient)
+        qdrant = Qdrant(
+            collection_name="test",
+            embedding_model_dims=2,
+            client=client_mock,
+        )
+        vid = str(uuid.uuid4())
+        qdrant.insert(vectors=[[0.1, 0.2]], payloads=[{"k": "v"}], ids=[vid])
+        points = client_mock.upsert.call_args[1]["points"]
+        self.assertEqual(points[0].vector, [0.1, 0.2])
+
+    def test_update_wraps_vector_with_named_vector(self):
+        """Update wraps vector in dict when vector_name is set."""
+        client_mock = MagicMock(spec=QdrantClient)
+        qdrant = Qdrant(
+            collection_name="test",
+            embedding_model_dims=2,
+            client=client_mock,
+            vector_name="content",
+        )
+        vid = str(uuid.uuid4())
+        qdrant.update(vector_id=vid, vector=[0.3, 0.4], payload={"k": "v2"})
+        point = client_mock.upsert.call_args[1]["points"][0]
+        self.assertEqual(point.vector, {"content": [0.3, 0.4]})
+
+    def test_update_vector_only_wraps_with_named_vector(self):
+        """Update with vector only wraps vector in dict when vector_name is set."""
+        client_mock = MagicMock(spec=QdrantClient)
+        qdrant = Qdrant(
+            collection_name="test",
+            embedding_model_dims=2,
+            client=client_mock,
+            vector_name="content",
+        )
+        vid = str(uuid.uuid4())
+        qdrant.update(vector_id=vid, vector=[0.3, 0.4], payload=None)
+        client_mock.update_vectors.assert_called_once_with(
+            collection_name="test",
+            points=[PointVectors(id=vid, vector={"content": [0.3, 0.4]})],
+        )
 
 
 class TestQdrantEnhancedFilters(unittest.TestCase):
