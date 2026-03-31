@@ -549,6 +549,63 @@ class TestQdrantNamedVectors(unittest.TestCase):
             points=[PointVectors(id=vid, vector={"content": [0.3, 0.4]})],
         )
 
+    def test_multiple_named_vectors_without_config_raises_error(self):
+        """Error when collection has multiple named vectors and no vector_name config."""
+        client_mock = MagicMock(spec=QdrantClient)
+        mock_col = MagicMock()
+        mock_col.name = "test"
+        client_mock.get_collections.return_value = MagicMock(collections=[mock_col])
+        mock_info = MagicMock()
+        mock_info.config.params.vectors = {
+            "content": VectorParams(size=128, distance=Distance.COSINE),
+            "image": VectorParams(size=256, distance=Distance.COSINE),
+        }
+        client_mock.get_collection.return_value = mock_info
+
+        with self.assertRaises(ValueError) as ctx:
+            Qdrant(collection_name="test", embedding_model_dims=128, client=client_mock)
+        self.assertIn("multiple named vectors", str(ctx.exception))
+
+    def test_invalid_vector_name_raises_error(self):
+        """Error when configured vector_name doesn't exist in the collection."""
+        client_mock = MagicMock(spec=QdrantClient)
+        mock_col = MagicMock()
+        mock_col.name = "test"
+        client_mock.get_collections.return_value = MagicMock(collections=[mock_col])
+        mock_info = MagicMock()
+        mock_info.config.params.vectors = {
+            "content": VectorParams(size=128, distance=Distance.COSINE),
+        }
+        client_mock.get_collection.return_value = mock_info
+
+        with self.assertRaises(ValueError) as ctx:
+            Qdrant(
+                collection_name="test",
+                embedding_model_dims=128,
+                client=client_mock,
+                vector_name="nonexistent",
+            )
+        self.assertIn("not found", str(ctx.exception))
+
+    def test_vector_name_with_unnamed_collection_raises_error(self):
+        """Error when vector_name is configured but collection uses unnamed vectors."""
+        client_mock = MagicMock(spec=QdrantClient)
+        mock_col = MagicMock()
+        mock_col.name = "test"
+        client_mock.get_collections.return_value = MagicMock(collections=[mock_col])
+        mock_info = MagicMock()
+        mock_info.config.params.vectors = VectorParams(size=128, distance=Distance.COSINE)
+        client_mock.get_collection.return_value = mock_info
+
+        with self.assertRaises(ValueError) as ctx:
+            Qdrant(
+                collection_name="test",
+                embedding_model_dims=128,
+                client=client_mock,
+                vector_name="content",
+            )
+        self.assertIn("default unnamed vector", str(ctx.exception))
+
 
 class TestQdrantEnhancedFilters(unittest.TestCase):
     """Tests for enhanced metadata filtering operators (issue #3975)."""
