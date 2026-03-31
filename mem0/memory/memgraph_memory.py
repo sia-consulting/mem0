@@ -351,8 +351,14 @@ class MemoryGraph:
                     "limit": limit,
                 }
 
-            ans = self.graph.query(cypher_query, params=params)
-            result_relations.extend(ans)
+            try:
+                ans = self.graph.query(cypher_query, params=params)
+                result_relations.extend(ans)
+            except Exception as e:
+                if "doesn't exist" in str(e):
+                    logger.warning(f"Stale node reference in vector index during graph search: {e}")
+                else:
+                    raise
 
         return result_relations
 
@@ -588,7 +594,13 @@ class MemoryGraph:
                 "threshold": threshold,
             }
 
-        result = self.graph.query(cypher, params=params)
+        try:
+            result = self.graph.query(cypher, params=params)
+        except Exception as e:
+            if "doesn't exist" in str(e):
+                logger.warning(f"Stale node reference in vector index during source node search: {e}")
+                return []
+            raise
         return result
 
     def _search_destination_node(self, destination_embedding, filters, threshold=0.9):
@@ -627,9 +639,14 @@ class MemoryGraph:
                 "threshold": threshold,
             }
 
-        result = self.graph.query(cypher, params=params)
+        try:
+            result = self.graph.query(cypher, params=params)
+        except Exception as e:
+            if "doesn't exist" in str(e):
+                logger.warning(f"Stale node reference in vector index during destination node search: {e}")
+                return []
+            raise
         return result
-
 
     def _vector_index_exists(self, index_info, index_name):
         """
