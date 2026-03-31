@@ -157,3 +157,91 @@ class TestAddEntitiesCypherEscaping:
         cypher = self._run_add_entities({"acme": "person", "corp": "company"})
         assert ":`person`" in cypher
         assert ":`company`" in cypher
+
+
+class TestStaleNodeReferenceHandling:
+    """Tests that vector_search.search returning stale (deleted) node references
+    is handled gracefully instead of crashing with 'Trying to access labels
+    from a node that doesn't exist'."""
+
+    def test_search_graph_db_stale_node_returns_empty(self):
+        """_search_graph_db should return empty results when Memgraph raises
+        a stale-node error from the vector index."""
+        instance = _make_instance()
+        instance.threshold = 0.7
+        instance.embedding_model.embed.return_value = [0.1, 0.2]
+        instance.graph = MagicMock()
+        instance.graph.query.side_effect = Exception(
+            "Trying to access labels from a node that doesn't exist."
+        )
+        result = instance._search_graph_db(
+            node_list=["alice"], filters={"user_id": "u1"}
+        )
+        assert result == []
+
+    def test_search_graph_db_other_errors_still_raised(self):
+        """_search_graph_db should re-raise errors that are NOT stale-node errors."""
+        instance = _make_instance()
+        instance.threshold = 0.7
+        instance.embedding_model.embed.return_value = [0.1, 0.2]
+        instance.graph = MagicMock()
+        instance.graph.query.side_effect = Exception("connection refused")
+        import pytest
+        with pytest.raises(Exception, match="connection refused"):
+            instance._search_graph_db(
+                node_list=["alice"], filters={"user_id": "u1"}
+            )
+
+    def test_search_source_node_stale_node_returns_empty(self):
+        """_search_source_node should return [] on stale-node errors."""
+        instance = _make_instance()
+        instance.graph = MagicMock()
+        instance.graph.query.side_effect = Exception(
+            "Trying to access labels from a node that doesn't exist."
+        )
+        result = instance._search_source_node(
+            source_embedding=[0.1, 0.2],
+            filters={"user_id": "u1"},
+            threshold=0.9,
+        )
+        assert result == []
+
+    def test_search_destination_node_stale_node_returns_empty(self):
+        """_search_destination_node should return [] on stale-node errors."""
+        instance = _make_instance()
+        instance.graph = MagicMock()
+        instance.graph.query.side_effect = Exception(
+            "Trying to access labels from a node that doesn't exist."
+        )
+        result = instance._search_destination_node(
+            destination_embedding=[0.1, 0.2],
+            filters={"user_id": "u1"},
+            threshold=0.9,
+        )
+        assert result == []
+
+    def test_search_source_node_other_errors_still_raised(self):
+        """_search_source_node should re-raise non-stale-node errors."""
+        instance = _make_instance()
+        instance.graph = MagicMock()
+        instance.graph.query.side_effect = Exception("connection refused")
+        import pytest
+        with pytest.raises(Exception, match="connection refused"):
+            instance._search_source_node(
+                source_embedding=[0.1, 0.2],
+                filters={"user_id": "u1"},
+                threshold=0.9,
+            )
+
+    def test_search_destination_node_other_errors_still_raised(self):
+        """_search_destination_node should re-raise non-stale-node errors."""
+        instance = _make_instance()
+        instance.graph = MagicMock()
+        instance.graph.query.side_effect = Exception("connection refused")
+        import pytest
+        with pytest.raises(Exception, match="connection refused"):
+            instance._search_destination_node(
+                destination_embedding=[0.1, 0.2],
+                filters={"user_id": "u1"},
+                threshold=0.9,
+            )
