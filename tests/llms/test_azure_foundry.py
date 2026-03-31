@@ -316,22 +316,29 @@ def test_init_config_client_id_takes_precedence_over_env_var(monkeypatch):
         mock_cred.assert_called_once_with(managed_identity_client_id=config_id)
 
 
-def test_init_cognitive_services_endpoint_sets_credential_scopes(monkeypatch):
-    """Cognitive Services endpoints should auto-detect the correct credential scope."""
+def test_init_cognitive_services_endpoint_uses_azure_openai(monkeypatch):
+    """Cognitive Services endpoints should use OpenAI instead of ChatCompletionsClient."""
     monkeypatch.delenv("AZURE_FOUNDRY_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_FOUNDRY_API_VERSION", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
     cog_endpoint = "https://myresource.cognitiveservices.azure.com/models"
     config = AzureFoundryConfig(model=MODEL, endpoint=cog_endpoint)
 
     with (
-        patch("mem0.llms.azure_foundry.ChatCompletionsClient") as mock_client_cls,
+        patch("mem0.llms.azure_foundry.OpenAI") as mock_aoai,
         patch("mem0.llms.azure_foundry.DefaultAzureCredential") as mock_cred,
+        patch("mem0.llms.azure_foundry.get_bearer_token_provider") as mock_token,
     ):
-        mock_cred_instance = mock_cred.return_value
+        mock_token.return_value = Mock(return_value="mock-token")
         AzureFoundryLLM(config)
-        mock_client_cls.assert_called_once_with(
-            endpoint=cog_endpoint,
-            credential=mock_cred_instance,
-            credential_scopes=["https://cognitiveservices.azure.com/.default"],
+        mock_cred.assert_called_once_with(managed_identity_client_id=None)
+        mock_token.assert_called_once_with(
+            mock_cred.return_value,
+            "https://cognitiveservices.azure.com/.default",
+        )
+        mock_aoai.assert_called_once_with(
+            base_url="https://myresource.cognitiveservices.azure.com/openai/v1/",
+            api_key="mock-token",
         )
 
 
@@ -375,24 +382,21 @@ def test_init_explicit_credential_scopes_override(monkeypatch):
         )
 
 
-def test_init_api_key_auth_no_credential_scopes(monkeypatch):
-    """API key auth should not pass credential_scopes."""
+def test_init_api_key_auth_cog_endpoint_uses_azure_openai(monkeypatch):
+    """API key auth with Cognitive Services endpoint should use OpenAI."""
     monkeypatch.delenv("AZURE_FOUNDRY_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_FOUNDRY_API_VERSION", raising=False)
     cog_endpoint = "https://myresource.cognitiveservices.azure.com/models"
     config = AzureFoundryConfig(
         model=MODEL, api_key=API_KEY, endpoint=cog_endpoint,
     )
 
-    with (
-        patch("mem0.llms.azure_foundry.ChatCompletionsClient") as mock_client_cls,
-        patch("mem0.llms.azure_foundry.AzureKeyCredential") as mock_cred,
-    ):
-        mock_cred.return_value = "mock-credential"
+    with patch("mem0.llms.azure_foundry.OpenAI") as mock_aoai:
+        mock_aoai.return_value = Mock()
         AzureFoundryLLM(config)
-        # API key auth should NOT pass credential_scopes
-        mock_client_cls.assert_called_once_with(
-            endpoint=cog_endpoint,
-            credential="mock-credential",
+        mock_aoai.assert_called_once_with(
+            base_url="https://myresource.cognitiveservices.azure.com/openai/v1/",
+            api_key=API_KEY,
         )
 
 
@@ -477,4 +481,116 @@ def test_init_no_api_version_uses_sdk_default(monkeypatch):
         mock_client_cls.assert_called_once_with(
             endpoint=ENDPOINT,
             credential="mock-credential",
+        )
+
+
+# ── Azure OpenAI / Cognitive Services endpoint tests (OpenAI SDK) ────────────
+
+COG_ENDPOINT = "https://myresource.cognitiveservices.azure.com"
+OPENAI_AZURE_ENDPOINT = "https://myresource.openai.azure.com"
+
+
+def test_cog_endpoint_generate_response_uses_openai_sdk(monkeypatch):
+    """Cognitive Services endpoint should call client.chat.completions.create()."""
+    monkeypatch.delenv("AZURE_FOUNDRY_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_FOUNDRY_API_VERSION", raising=False)
+    config = AzureFoundryConfig(
+        model=MODEL, temperature=TEMPERATURE, max_tokens=MAX_TOKENS, top_p=TOP_P,
+        api_key=API_KEY, endpoint=COG_ENDPOINT,
+    )
+
+    with patch("mem0.llms.azure_foundry.OpenAI") as mock_aoai:
+        mock_client = Mock()
+        mock_aoai.return_value = mock_client
+        mock_response = Mock()
+        mock_response.choices = [Mock(message=Mock(content="I'm doing well!"))]
+        mock_client.chat.completions.create.return_value = mock_response
+
+        llm = AzureFoundryLLM(config)
+        messages = [
+            {"role": "system", "content": "You are a helpful ai."},
+            {"role": "user", "content": "Hello, how are you?"},
+        ]
+        response = llm.generate_response(messages)
+
+        mock_client.chat.completions.create.assert_called_once()
+        assert response == "I'm doing well!"
+        assert llm._use_openai_sdk is True
+
+
+def test_cog_endpoint_response_format_dict_passed_through(monkeypatch):
+    """OpenAI SDK path should pass response_format dict as-is (no conversion)."""
+    monkeypatch.delenv("AZURE_FOUNDRY_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_FOUNDRY_API_VERSION", raising=False)
+    config = AzureFoundryConfig(
+        model=MODEL, temperature=TEMPERATURE, max_tokens=MAX_TOKENS, top_p=TOP_P,
+        api_key=API_KEY, endpoint=COG_ENDPOINT,
+    )
+
+    with patch("mem0.llms.azure_foundry.OpenAI") as mock_aoai:
+        mock_client = Mock()
+        mock_aoai.return_value = mock_client
+        mock_response = Mock()
+        mock_response.choices = [Mock(message=Mock(content='{"key": "value"}'))]
+        mock_client.chat.completions.create.return_value = mock_response
+
+        llm = AzureFoundryLLM(config)
+        messages = [{"role": "user", "content": "Return JSON."}]
+        llm.generate_response(messages, response_format={"type": "json_object"})
+
+        call_kwargs = mock_client.chat.completions.create.call_args[1]
+        # Dict should be passed through unchanged (not converted to string)
+        assert call_kwargs["response_format"] == {"type": "json_object"}
+
+
+def test_openai_azure_endpoint_uses_azure_openai(monkeypatch):
+    """*.openai.azure.com endpoints should also route through OpenAI."""
+    monkeypatch.delenv("AZURE_FOUNDRY_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_FOUNDRY_API_VERSION", raising=False)
+    config = AzureFoundryConfig(
+        model=MODEL, api_key=API_KEY, endpoint=OPENAI_AZURE_ENDPOINT,
+    )
+
+    with patch("mem0.llms.azure_foundry.OpenAI") as mock_aoai:
+        mock_aoai.return_value = Mock()
+        llm = AzureFoundryLLM(config)
+        mock_aoai.assert_called_once_with(
+            base_url="https://myresource.openai.azure.com/openai/v1/",
+            api_key=API_KEY,
+        )
+        assert llm._use_openai_sdk is True
+
+
+def test_cog_endpoint_api_version_from_env_var(monkeypatch):
+    """AZURE_FOUNDRY_API_VERSION env var should NOT affect the OpenAI client."""
+    monkeypatch.delenv("AZURE_FOUNDRY_API_KEY", raising=False)
+    monkeypatch.setenv("AZURE_FOUNDRY_API_VERSION", "2023-05-15")
+    config = AzureFoundryConfig(
+        model=MODEL, api_key=API_KEY, endpoint=COG_ENDPOINT,
+    )
+
+    with patch("mem0.llms.azure_foundry.OpenAI") as mock_aoai:
+        mock_aoai.return_value = Mock()
+        AzureFoundryLLM(config)
+        mock_aoai.assert_called_once_with(
+            base_url="https://myresource.cognitiveservices.azure.com/openai/v1/",
+            api_key=API_KEY,
+        )
+
+
+def test_cog_endpoint_strips_path_from_azure_endpoint(monkeypatch):
+    """OpenAI base_url should only contain scheme + host + /openai/v1/."""
+    monkeypatch.delenv("AZURE_FOUNDRY_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_FOUNDRY_API_VERSION", raising=False)
+    endpoint_with_path = "https://myresource.cognitiveservices.azure.com/openai/v1/models"
+    config = AzureFoundryConfig(
+        model=MODEL, api_key=API_KEY, endpoint=endpoint_with_path,
+    )
+
+    with patch("mem0.llms.azure_foundry.OpenAI") as mock_aoai:
+        mock_aoai.return_value = Mock()
+        AzureFoundryLLM(config)
+        mock_aoai.assert_called_once_with(
+            base_url="https://myresource.cognitiveservices.azure.com/openai/v1/",
+            api_key=API_KEY,
         )
