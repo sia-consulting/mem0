@@ -2,6 +2,7 @@ import logging
 from typing import Optional
 
 from qdrant_client import QdrantClient
+from qdrant_client.http.exceptions import UnexpectedResponse
 from qdrant_client.models import (
     Distance,
     FieldCondition,
@@ -175,6 +176,40 @@ class Qdrant(VectorStoreBase):
             except Exception as e:
                 logger.debug(f"Index for {field} might already exist: {e}")
 
+    def _with_collection_retry(self, operation):
+        """Execute a Qdrant operation, recreating the collection if it was deleted externally.
+
+        Catches Qdrant errors indicating the collection doesn't exist,
+        recreates it, and retries the operation once.  Handles both remote
+        clients (UnexpectedResponse 404) and local clients (ValueError).
+
+        Args:
+            operation: A callable that performs the Qdrant operation.
+
+        Returns:
+            The result of the operation.
+        """
+        try:
+            return operation()
+        except UnexpectedResponse as e:
+            if e.status_code == 404 and b"doesn't exist" in e.content:
+                logger.warning(
+                    f"Collection '{self.collection_name}' was deleted externally. "
+                    f"Recreating and retrying..."
+                )
+                self.create_col(self.embedding_model_dims, self.on_disk)
+                return operation()
+            raise
+        except ValueError as e:
+            if "not found" in str(e).lower():
+                logger.warning(
+                    f"Collection '{self.collection_name}' was deleted externally. "
+                    f"Recreating and retrying..."
+                )
+                self.create_col(self.embedding_model_dims, self.on_disk)
+                return operation()
+            raise
+
     def insert(self, vectors: list, payloads: list = None, ids: list = None):
         """
         Insert vectors into a collection.
@@ -193,7 +228,9 @@ class Qdrant(VectorStoreBase):
             )
             for idx, vector in enumerate(vectors)
         ]
-        self.client.upsert(collection_name=self.collection_name, points=points)
+        self._with_collection_retry(
+            lambda: self.client.upsert(collection_name=self.collection_name, points=points)
+        )
 
     def _build_field_condition(self, key: str, value) -> Optional[FieldCondition]:
         """
@@ -352,14 +389,18 @@ class Qdrant(VectorStoreBase):
             list: Search results.
         """
         query_filter = self._create_filter(filters) if filters else None
-        hits = self.client.query_points(
-            collection_name=self.collection_name,
-            query=vectors,
-            query_filter=query_filter,
-            limit=limit,
-            using=self.vector_name,
-        )
-        return hits.points
+
+        def _search():
+            hits = self.client.query_points(
+                collection_name=self.collection_name,
+                query=vectors,
+                query_filter=query_filter,
+                limit=limit,
+                using=self.vector_name,
+            )
+            return hits.points
+
+        return self._with_collection_retry(_search)
 
     def delete(self, vector_id: int):
         """
@@ -368,11 +409,13 @@ class Qdrant(VectorStoreBase):
         Args:
             vector_id (int): ID of the vector to delete.
         """
-        self.client.delete(
-            collection_name=self.collection_name,
-            points_selector=PointIdsList(
-                points=[vector_id],
-            ),
+        self._with_collection_retry(
+            lambda: self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=PointIdsList(
+                    points=[vector_id],
+                ),
+            )
         )
 
     def update(self, vector_id: int, vector: list = None, payload: dict = None):
@@ -384,26 +427,29 @@ class Qdrant(VectorStoreBase):
             vector (list, optional): Updated vector. Defaults to None.
             payload (dict, optional): Updated payload. Defaults to None.
         """
-        if vector is not None and payload is not None:
-            point = PointStruct(
-                id=vector_id,
-                vector={self.vector_name: vector} if self.vector_name else vector,
-                payload=payload,
-            )
-            self.client.upsert(collection_name=self.collection_name, points=[point])
-        else:
-            if payload is not None:
-                self.client.set_payload(
-                    collection_name=self.collection_name,
+        def _update():
+            if vector is not None and payload is not None:
+                point = PointStruct(
+                    id=vector_id,
+                    vector={self.vector_name: vector} if self.vector_name else vector,
                     payload=payload,
-                    points=[vector_id],
                 )
-            if vector is not None:
-                point_vector = {self.vector_name: vector} if self.vector_name else vector
-                self.client.update_vectors(
-                    collection_name=self.collection_name,
-                    points=[PointVectors(id=vector_id, vector=point_vector)],
-                )
+                self.client.upsert(collection_name=self.collection_name, points=[point])
+            else:
+                if payload is not None:
+                    self.client.set_payload(
+                        collection_name=self.collection_name,
+                        payload=payload,
+                        points=[vector_id],
+                    )
+                if vector is not None:
+                    point_vector = {self.vector_name: vector} if self.vector_name else vector
+                    self.client.update_vectors(
+                        collection_name=self.collection_name,
+                        points=[PointVectors(id=vector_id, vector=point_vector)],
+                    )
+
+        self._with_collection_retry(_update)
 
     def get(self, vector_id: int) -> dict:
         """
@@ -415,7 +461,9 @@ class Qdrant(VectorStoreBase):
         Returns:
             dict: Retrieved vector.
         """
-        result = self.client.retrieve(collection_name=self.collection_name, ids=[vector_id], with_payload=True)
+        result = self._with_collection_retry(
+            lambda: self.client.retrieve(collection_name=self.collection_name, ids=[vector_id], with_payload=True)
+        )
         return result[0] if result else None
 
     def list_cols(self) -> list:
@@ -452,14 +500,17 @@ class Qdrant(VectorStoreBase):
             list: List of vectors.
         """
         query_filter = self._create_filter(filters) if filters else None
-        result = self.client.scroll(
-            collection_name=self.collection_name,
-            scroll_filter=query_filter,
-            limit=limit,
-            with_payload=True,
-            with_vectors=False,
-        )
-        return result
+
+        def _scroll():
+            return self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=query_filter,
+                limit=limit,
+                with_payload=True,
+                with_vectors=False,
+            )
+
+        return self._with_collection_retry(_scroll)
 
     def reset(self):
         """Reset the index by deleting and recreating it."""

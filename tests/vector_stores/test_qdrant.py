@@ -607,6 +607,142 @@ class TestQdrantNamedVectors(unittest.TestCase):
         self.assertIn("default unnamed vector", str(ctx.exception))
 
 
+class TestQdrantCollectionRetry(unittest.TestCase):
+    """Tests for automatic collection recreation when deleted externally."""
+
+    def setUp(self):
+        self.client_mock = MagicMock(spec=QdrantClient)
+        self.qdrant = Qdrant(
+            collection_name="test_collection",
+            embedding_model_dims=128,
+            client=self.client_mock,
+        )
+        # Reset mocks after __init__ so tests only see calls from the method under test
+        self.client_mock.reset_mock()
+
+    def _make_404_response(self, collection_name="test_collection"):
+        """Create a mock UnexpectedResponse for a missing collection."""
+        from qdrant_client.http.exceptions import UnexpectedResponse
+        return UnexpectedResponse(
+            status_code=404,
+            reason_phrase="Not Found",
+            content=f'{{"status":{{"error":"Not found: Collection `{collection_name}` doesn\'t exist!"}},"time":0.00001}}'.encode(),
+            headers={},
+        )
+
+    def test_search_recreates_collection_on_404(self):
+        """Search should recreate the collection and retry when it was deleted."""
+        error = self._make_404_response()
+        mock_result = MagicMock(points=[])
+        # First call raises 404, second succeeds
+        self.client_mock.query_points.side_effect = [error, mock_result]
+        self.client_mock.get_collections.return_value = MagicMock(collections=[])
+
+        results = self.qdrant.search(query="test", vectors=[0.1, 0.2], limit=5)
+
+        self.assertEqual(results, [])
+        self.assertEqual(self.client_mock.query_points.call_count, 2)
+        self.client_mock.create_collection.assert_called_once()
+
+    def test_search_recreates_collection_on_local_value_error(self):
+        """Search should recreate the collection on local client ValueError."""
+        mock_result = MagicMock(points=[])
+        self.client_mock.query_points.side_effect = [
+            ValueError("Collection test_collection not found"),
+            mock_result,
+        ]
+        self.client_mock.get_collections.return_value = MagicMock(collections=[])
+
+        results = self.qdrant.search(query="test", vectors=[0.1, 0.2], limit=5)
+
+        self.assertEqual(results, [])
+        self.assertEqual(self.client_mock.query_points.call_count, 2)
+        self.client_mock.create_collection.assert_called_once()
+
+    def test_insert_recreates_collection_on_404(self):
+        """Insert should recreate the collection and retry when it was deleted."""
+        error = self._make_404_response()
+        self.client_mock.upsert.side_effect = [error, None]
+        self.client_mock.get_collections.return_value = MagicMock(collections=[])
+
+        vid = str(uuid.uuid4())
+        self.qdrant.insert(vectors=[[0.1, 0.2]], payloads=[{"k": "v"}], ids=[vid])
+
+        self.assertEqual(self.client_mock.upsert.call_count, 2)
+        self.client_mock.create_collection.assert_called_once()
+
+    def test_delete_recreates_collection_on_404(self):
+        """Delete should recreate the collection and retry when it was deleted."""
+        error = self._make_404_response()
+        self.client_mock.delete.side_effect = [error, None]
+        self.client_mock.get_collections.return_value = MagicMock(collections=[])
+
+        self.qdrant.delete(vector_id="some-id")
+
+        self.assertEqual(self.client_mock.delete.call_count, 2)
+        self.client_mock.create_collection.assert_called_once()
+
+    def test_get_recreates_collection_on_404(self):
+        """Get should recreate the collection and retry when it was deleted."""
+        error = self._make_404_response()
+        self.client_mock.retrieve.side_effect = [error, []]
+        self.client_mock.get_collections.return_value = MagicMock(collections=[])
+
+        result = self.qdrant.get(vector_id="some-id")
+
+        self.assertIsNone(result)
+        self.assertEqual(self.client_mock.retrieve.call_count, 2)
+        self.client_mock.create_collection.assert_called_once()
+
+    def test_list_recreates_collection_on_404(self):
+        """List should recreate the collection and retry when it was deleted."""
+        error = self._make_404_response()
+        self.client_mock.scroll.side_effect = [error, ([], None)]
+        self.client_mock.get_collections.return_value = MagicMock(collections=[])
+
+        result = self.qdrant.list()
+
+        self.assertEqual(self.client_mock.scroll.call_count, 2)
+        self.client_mock.create_collection.assert_called_once()
+
+    def test_update_recreates_collection_on_404(self):
+        """Update should recreate the collection and retry when it was deleted."""
+        error = self._make_404_response()
+        self.client_mock.upsert.side_effect = [error, None]
+        self.client_mock.get_collections.return_value = MagicMock(collections=[])
+
+        vid = str(uuid.uuid4())
+        self.qdrant.update(vector_id=vid, vector=[0.3, 0.4], payload={"k": "v"})
+
+        self.assertEqual(self.client_mock.upsert.call_count, 2)
+        self.client_mock.create_collection.assert_called_once()
+
+    def test_non_404_error_is_not_caught(self):
+        """Non-404 errors should be re-raised without retry."""
+        from qdrant_client.http.exceptions import UnexpectedResponse
+        error = UnexpectedResponse(
+            status_code=500,
+            reason_phrase="Internal Server Error",
+            content=b'{"status":{"error":"Internal error"}}',
+            headers={},
+        )
+        self.client_mock.query_points.side_effect = error
+
+        with self.assertRaises(UnexpectedResponse) as ctx:
+            self.qdrant.search(query="test", vectors=[0.1, 0.2], limit=5)
+        self.assertEqual(ctx.exception.status_code, 500)
+        self.client_mock.create_collection.assert_not_called()
+
+    def test_unrelated_value_error_is_not_caught(self):
+        """ValueError messages unrelated to missing collection should be re-raised."""
+        self.client_mock.query_points.side_effect = ValueError("Invalid vector dimensions")
+
+        with self.assertRaises(ValueError) as ctx:
+            self.qdrant.search(query="test", vectors=[0.1, 0.2], limit=5)
+        self.assertIn("Invalid vector dimensions", str(ctx.exception))
+        self.client_mock.create_collection.assert_not_called()
+
+
 class TestQdrantEnhancedFilters(unittest.TestCase):
     """Tests for enhanced metadata filtering operators (issue #3975)."""
 
