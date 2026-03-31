@@ -459,7 +459,7 @@ class MemoryGraph:
                 cypher = f"""
                     MATCH (source:Entity)
                     WHERE id(source) = $source_id
-                    MERGE (destination:{destination_type}:Entity {{name: $destination_name, user_id: $user_id{agent_id_clause}}})
+                    MERGE (destination:`{destination_type}`:Entity {{name: $destination_name, user_id: $user_id{agent_id_clause}}})
                     ON CREATE SET
                         destination.created = timestamp(),
                         destination.embedding = $destination_embedding,
@@ -483,7 +483,7 @@ class MemoryGraph:
                 cypher = f"""
                     MATCH (destination:Entity)
                     WHERE id(destination) = $destination_id
-                    MERGE (source:{source_type}:Entity {{name: $source_name, user_id: $user_id{agent_id_clause}}})
+                    MERGE (source:`{source_type}`:Entity {{name: $source_name, user_id: $user_id{agent_id_clause}}})
                     ON CREATE SET
                         source.created = timestamp(),
                         source.embedding = $source_embedding,
@@ -525,10 +525,10 @@ class MemoryGraph:
 
             else:
                 cypher = f"""
-                    MERGE (n:{source_type}:Entity {{name: $source_name, user_id: $user_id{agent_id_clause}}})
+                    MERGE (n:`{source_type}`:Entity {{name: $source_name, user_id: $user_id{agent_id_clause}}})
                     ON CREATE SET n.created = timestamp(), n.embedding = $source_embedding, n:Entity
                     ON MATCH SET n.embedding = $source_embedding
-                    MERGE (m:{destination_type}:Entity {{name: $dest_name, user_id: $user_id{agent_id_clause}}})
+                    MERGE (m:`{destination_type}`:Entity {{name: $dest_name, user_id: $user_id{agent_id_clause}}})
                     ON CREATE SET m.created = timestamp(), m.embedding = $dest_embedding, m:Entity
                     ON MATCH SET m.embedding = $dest_embedding
                     MERGE (n)-[rel:{relationship}]->(m)

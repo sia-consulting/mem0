@@ -105,3 +105,55 @@ class TestEstablishNodesRelationsFromData:
         )
         assert len(result) == 1
         assert result[0]["source"] == "alice"
+
+
+class TestAddEntitiesCypherEscaping:
+    """Tests that _add_entities wraps entity types in backticks so special
+    characters (e.g. '/') don't break the Cypher parser."""
+
+    def _run_add_entities(self, entity_type_map, source_search=None, dest_search=None):
+        """Helper: call _add_entities with mocked graph and return the Cypher string."""
+        instance = _make_instance()
+        instance.threshold = 0.9
+        instance.embedding_model.embed.return_value = [0.1, 0.2]
+        instance.graph = MagicMock()
+        instance._search_source_node = MagicMock(return_value=source_search)
+        instance._search_destination_node = MagicMock(return_value=dest_search)
+
+        to_be_added = [{"source": "acme", "relationship": "IS_A", "destination": "corp"}]
+        instance._add_entities(to_be_added, {"user_id": "u1"}, entity_type_map)
+
+        cypher = instance.graph.query.call_args[0][0]
+        return cypher
+
+    def test_slash_in_entity_type_both_new(self):
+        """Entity type 'organization/team' must be backtick-escaped in Cypher labels."""
+        cypher = self._run_add_entities(
+            {"acme": "organization/team", "corp": "organization/parent"},
+        )
+        assert ":`organization/team`" in cypher
+        assert ":`organization/parent`" in cypher
+
+    def test_slash_in_entity_type_source_exists(self):
+        """When source exists but destination is new, destination type is backtick-escaped."""
+        cypher = self._run_add_entities(
+            {"acme": "person", "corp": "org/unit"},
+            source_search=[{"id(source_candidate)": 42}],
+            dest_search=None,
+        )
+        assert ":`org/unit`" in cypher
+
+    def test_slash_in_entity_type_dest_exists(self):
+        """When destination exists but source is new, source type is backtick-escaped."""
+        cypher = self._run_add_entities(
+            {"acme": "org/unit", "corp": "company"},
+            source_search=None,
+            dest_search=[{"id(destination_candidate)": 99}],
+        )
+        assert ":`org/unit`" in cypher
+
+    def test_normal_entity_type_still_backtick_escaped(self):
+        """Even plain entity types get backticks (harmless, consistent)."""
+        cypher = self._run_add_entities({"acme": "person", "corp": "company"})
+        assert ":`person`" in cypher
+        assert ":`company`" in cypher
