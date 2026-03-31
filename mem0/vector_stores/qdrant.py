@@ -123,31 +123,37 @@ class Qdrant(VectorStoreBase):
             vectors_config = collection_info.config.params.vectors
             if isinstance(vectors_config, dict):
                 # Collection uses named vectors
+                vector_names = list(vectors_config.keys())
                 if self.vector_name is None:
-                    # Auto-detect: use the first named vector
-                    vector_names = list(vectors_config.keys())
+                    if len(vector_names) > 1:
+                        raise ValueError(
+                            f"Collection '{self.collection_name}' has multiple named vectors "
+                            f"{vector_names}. Please set 'vector_name' in your Qdrant config "
+                            f"to specify which vector to use."
+                        )
                     self.vector_name = vector_names[0]
                     logger.info(
                         f"Auto-detected named vector '{self.vector_name}' from collection "
-                        f"'{self.collection_name}'. Available vectors: {vector_names}"
+                        f"'{self.collection_name}'."
                     )
                 elif self.vector_name not in vectors_config:
-                    available = list(vectors_config.keys())
-                    logger.warning(
+                    raise ValueError(
                         f"Configured vector_name '{self.vector_name}' not found in collection "
-                        f"'{self.collection_name}'. Available vectors: {available}"
+                        f"'{self.collection_name}'. Available vectors: {vector_names}"
                     )
             else:
                 # Collection uses default unnamed vector
                 if self.vector_name is not None:
-                    logger.warning(
+                    raise ValueError(
                         f"vector_name '{self.vector_name}' was configured but collection "
                         f"'{self.collection_name}' uses a default unnamed vector. "
-                        f"Ignoring vector_name."
+                        f"Remove 'vector_name' from your Qdrant config or recreate the "
+                        f"collection with named vectors."
                     )
-                    self.vector_name = None
+        except ValueError:
+            raise
         except Exception as e:
-            logger.debug(f"Could not detect vector configuration for collection '{self.collection_name}': {e}")
+            logger.warning(f"Could not detect vector configuration for collection '{self.collection_name}': {e}")
 
     def _create_filter_indexes(self):
         """Create indexes for commonly used filter fields to enable filtering."""
