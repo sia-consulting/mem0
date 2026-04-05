@@ -519,35 +519,6 @@ pip install opentelemetry-api opentelemetry-sdk
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
 | `MEM0_OTEL_ENABLED` | `true` (when OTel installed) | Set to `false` to disable OTel instrumentation |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | *(none)* | OTLP gRPC endpoint (e.g. `http://localhost:4317`) — enables OTLP export |
-| `APPLICATIONINSIGHTS_CONNECTION_STRING` | *(none)* | Azure Application Insights connection string — enables Azure Monitor export |
-| `OTEL_SERVICE_NAME` | `mem0` | Service name reported in traces |
-
-### Server (FastAPI)
-
-The `server/main.py` FastAPI application includes a full OpenTelemetry setup that mirrors the .NET coworkers pipeline:
-
-1. **TracerProvider** with `service.name=mem0` resource
-2. **OTLP exporter** when `OTEL_EXPORTER_OTLP_ENDPOINT` is set
-3. **Azure Monitor exporter** when `APPLICATIONINSIGHTS_CONNECTION_STRING` is set
-4. **FastAPI instrumentation** for `SpanKind.SERVER` root spans and W3C `traceparent` + `baggage` extraction
-5. **Logging instrumentation** for trace/span ID injection into log records
-
-Install the server OTel dependencies:
-
-```bash
-# Core (included in server/requirements.txt)
-pip install opentelemetry-api opentelemetry-sdk opentelemetry-instrumentation-fastapi
-
-# OTLP exporter (when using Jaeger, Grafana Tempo, etc.)
-pip install opentelemetry-exporter-otlp-proto-grpc
-
-# Azure Monitor exporter (when using Application Insights)
-pip install azure-monitor-opentelemetry-exporter
-
-# Log correlation (optional)
-pip install opentelemetry-instrumentation-logging
-```
 
 ## ⚖️ License
 

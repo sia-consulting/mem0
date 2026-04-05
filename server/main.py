@@ -16,100 +16,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 # Load environment variables
 load_dotenv()
 
-# ============================================================================
-# OpenTelemetry Setup
-# ============================================================================
-# Mirrors the .NET OpenTelemetry setup in Automagisch.AI.Extensions.OpenTelemetry:
-# - OTLP exporter when OTEL_EXPORTER_OTLP_ENDPOINT is set
-# - Azure Monitor exporter when APPLICATIONINSIGHTS_CONNECTION_STRING is set
-# - W3C trace-context + baggage propagation (automatic via SDK defaults)
-# - FastAPI instrumentation for SpanKind.SERVER root spans
-# ============================================================================
-
-_OTEL_CONFIGURED = False
-
-
-def _configure_opentelemetry() -> None:
-    """
-    Configure OpenTelemetry tracing for the mem0 FastAPI service.
-
-    Activates when the OTel SDK is importable and ``MEM0_OTEL_ENABLED`` is not
-    set to ``"false"``.  Mirrors the .NET side:
-
-    * OTLP exporter  → ``OTEL_EXPORTER_OTLP_ENDPOINT``
-    * Azure Monitor  → ``APPLICATIONINSIGHTS_CONNECTION_STRING``
-    * W3C propagation is automatic via the SDK defaults.
-    """
-    global _OTEL_CONFIGURED
-
-    otel_opt_out = os.environ.get("MEM0_OTEL_ENABLED", "").strip().lower()
-    if otel_opt_out in ("false", "0", "no"):
-        logging.info("OpenTelemetry disabled via MEM0_OTEL_ENABLED")
-        return
-
-    try:
-        from opentelemetry import trace
-        from opentelemetry.sdk.resources import Resource
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor
-    except ImportError:
-        logging.info("OpenTelemetry SDK not installed — tracing disabled")
-        return
-
-    resource = Resource.create(
-        {
-            "service.name": os.getenv("OTEL_SERVICE_NAME", "mem0"),
-            "service.namespace": "mem0",
-        }
-    )
-    provider = TracerProvider(resource=resource)
-
-    # OTLP exporter (same env var as .NET side)
-    otlp_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
-    if otlp_endpoint:
-        try:
-            from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-
-            provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=otlp_endpoint)))
-            logging.info("OpenTelemetry OTLP exporter configured: %s", otlp_endpoint)
-        except ImportError:
-            logging.warning(
-                "OTEL_EXPORTER_OTLP_ENDPOINT is set but opentelemetry-exporter-otlp-proto-grpc "
-                "is not installed — OTLP export disabled"
-            )
-
-    # Azure Monitor exporter (same pattern as .NET Azure:AppInsightsConnectionString)
-    app_insights_cs = os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING")
-    if app_insights_cs:
-        try:
-            from azure.monitor.opentelemetry.exporter import AzureMonitorTraceExporter
-
-            provider.add_span_processor(
-                BatchSpanProcessor(AzureMonitorTraceExporter(connection_string=app_insights_cs))
-            )
-            logging.info("OpenTelemetry Azure Monitor exporter configured")
-        except ImportError:
-            logging.warning(
-                "APPLICATIONINSIGHTS_CONNECTION_STRING is set but azure-monitor-opentelemetry-exporter "
-                "is not installed — Azure Monitor export disabled"
-            )
-
-    trace.set_tracer_provider(provider)
-
-    # Inject trace/span IDs into log records (optional)
-    try:
-        from opentelemetry.instrumentation.logging import LoggingInstrumentor
-
-        LoggingInstrumentor().instrument(set_logging_format=True)
-    except ImportError:
-        pass
-
-    _OTEL_CONFIGURED = True
-    logging.info("OpenTelemetry initialized for mem0 service")
-
-
-_configure_opentelemetry()
-
 ADMIN_API_KEY = os.environ.get("ADMIN_API_KEY", "")
 
 MIN_KEY_LENGTH = 16
@@ -180,18 +86,6 @@ app = FastAPI(
     ),
     version="1.0.0",
 )
-
-# Instrument FastAPI with OpenTelemetry (SpanKind.SERVER root spans, W3C context propagation)
-if _OTEL_CONFIGURED:
-    try:
-        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor  # type: ignore
-
-        FastAPIInstrumentor.instrument_app(app)
-        logging.info("OpenTelemetry FastAPI instrumentation enabled")
-    except ImportError:
-        logging.info("opentelemetry-instrumentation-fastapi not installed — ASGI auto-instrumentation skipped")
-    except Exception as exc:
-        logging.warning("Failed to enable OpenTelemetry FastAPI instrumentation: %s", exc)
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
