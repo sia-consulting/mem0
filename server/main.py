@@ -16,6 +16,23 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 # Load environment variables
 load_dotenv()
 
+# ---------------------------------------------------------------------------
+# OpenTelemetry ASGI middleware (auto-enabled when the SDK is importable)
+# Creates SpanKind.SERVER root spans and extracts W3C traceparent + baggage.
+# ---------------------------------------------------------------------------
+_OTEL_MIDDLEWARE_AVAILABLE = False
+try:
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor  # type: ignore
+
+    _OTEL_MIDDLEWARE_AVAILABLE = True
+except ImportError:
+    try:
+        from opentelemetry.instrumentation.asgi import OpenTelemetryMiddleware  # type: ignore
+
+        _OTEL_MIDDLEWARE_AVAILABLE = True
+    except ImportError:
+        pass
+
 ADMIN_API_KEY = os.environ.get("ADMIN_API_KEY", "")
 
 MIN_KEY_LENGTH = 16
@@ -86,6 +103,20 @@ app = FastAPI(
     ),
     version="1.0.0",
 )
+
+# Instrument FastAPI with OpenTelemetry (SpanKind.SERVER, W3C context propagation)
+if _OTEL_MIDDLEWARE_AVAILABLE:
+    _otel_opt_out = os.environ.get("MEM0_OTEL_ENABLED", "").strip().lower()
+    if _otel_opt_out not in ("false", "0", "no"):
+        try:
+            FastAPIInstrumentor.instrument_app(app)
+            logging.info("OpenTelemetry FastAPI instrumentation enabled")
+        except Exception:
+            try:
+                app.add_middleware(OpenTelemetryMiddleware)
+                logging.info("OpenTelemetry ASGI middleware enabled")
+            except Exception as exc:
+                logging.warning(f"Failed to enable OpenTelemetry middleware: {exc}")
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 

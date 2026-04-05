@@ -484,6 +484,50 @@ We now have a paper you can cite:
 }
 ```
 
+## 📊 OpenTelemetry Instrumentation
+
+mem0 includes built-in OpenTelemetry (OTel) tracing and metrics for observability. Traces and metrics are **automatically enabled** when the `opentelemetry-api` package is installed — no configuration needed. You can opt out by setting `MEM0_OTEL_ENABLED=false`.
+
+### Install
+
+```bash
+pip install "mem0ai[telemetry]"
+```
+
+Or install the OTel packages directly:
+
+```bash
+pip install opentelemetry-api opentelemetry-sdk
+```
+
+### What's Instrumented
+
+| Signal | Details |
+|--------|---------|
+| **Tracer** | Name: `"mem0"` — subscribe with `.AddSource("mem0")` in .NET |
+| **Meter** | Name: `"mem0"` — subscribe with `.AddMeter("mem0")` in .NET |
+| **Span names** | `mem0.add`, `mem0.search`, `mem0.get`, `mem0.get_all`, `mem0.update`, `mem0.delete`, `mem0.delete_all`, `mem0.history`, `mem0.reset` |
+| **Span kind** | `INTERNAL` for library-level spans; `SERVER` when using the FastAPI server with OTel ASGI middleware |
+| **Span attributes** | `mem0.operation`, `mem0.user_id`, `mem0.agent_id`, `mem0.run_id`, `mem0.thread_id`, `mem0.memory_id`, `mem0.infer`, `mem0.collection`, `mem0.vector_store.provider`, `mem0.llm.provider`, `mem0.embedder.provider`, `mem0.result.count`, `mem0.has_graph` |
+| **Baggage** | Reads `coworker.correlationId` and `coworker.id` from W3C baggage and sets them as span attributes |
+| **Span events** | `mem0.memory.created`, `mem0.memory.updated`, `mem0.memory.deleted`, `mem0.memory.noop` |
+| **Metrics** | `mem0.operation.count` (Counter), `mem0.operation.duration` (Histogram, ms), `mem0.operation.errors` (Counter) |
+| **Error handling** | `span.record_exception()` + `StatusCode.ERROR` on failures |
+
+### Configuration
+
+| Environment Variable | Default | Description |
+|---------------------|---------|-------------|
+| `MEM0_OTEL_ENABLED` | `true` (when OTel installed) | Set to `false` to disable OTel instrumentation |
+
+### Server (FastAPI)
+
+The `server/main.py` FastAPI application automatically adds OpenTelemetry ASGI middleware when `opentelemetry-instrumentation-fastapi` is installed. This creates `SpanKind.SERVER` root spans and extracts incoming W3C `traceparent` + `baggage` headers, so mem0 library spans appear as children in distributed traces.
+
+```bash
+pip install opentelemetry-instrumentation-fastapi
+```
+
 ## ⚖️ License
 
 Apache 2.0 — see the [LICENSE](https://github.com/mem0ai/mem0/blob/main/LICENSE) file for details.
