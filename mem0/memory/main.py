@@ -24,6 +24,13 @@ from mem0.memory.base import MemoryBase
 from mem0.memory.setup import mem0_dir, setup_config
 from mem0.memory.storage import SQLiteManager
 from mem0.memory.telemetry import MEM0_TELEMETRY, capture_event
+from mem0.memory.otel import (
+    async_traced,
+    child_span,
+    record_memory_event,
+    set_search_result_attributes,
+    traced,
+)
 from mem0.memory.utils import (
     ensure_json_instruction,
     extract_json,
@@ -310,6 +317,14 @@ class Memory(MemoryBase):
             )
         capture_event("mem0.init", self, {"sync_type": "sync"})
 
+        # OTel provider-level attributes (set once, attached to every span)
+        self._otel_provider_attrs = {
+            "mem0.collection": self.collection_name,
+            "mem0.vector_store.provider": self.config.vector_store.provider,
+            "mem0.llm.provider": self.config.llm.provider,
+            "mem0.embedder.provider": self.config.embedder.provider,
+        }
+
     def _log_provider_config(self):
         """Log the configured LLM and embedding providers at startup for visibility."""
         llm_provider = self.config.llm.provider
@@ -393,6 +408,7 @@ class Memory(MemoryBase):
         # Use agent memory extraction if agent_id is present and there are assistant messages
         return has_agent_id and has_assistant_messages
 
+    @traced("add")
     def add(
         self,
         messages,
@@ -524,6 +540,7 @@ class Memory(MemoryBase):
                 msg_embeddings = self.embedding_model.embed(msg_content, "add")
                 # Pass embeddings as a dict so _create_memory can reuse the cached embedding
                 mem_id = self._create_memory(msg_content, {msg_content: msg_embeddings}, per_msg_meta)
+                record_memory_event("mem0.memory.created", memory_id=mem_id, operation="add")
 
                 returned_memories.append(
                     {
@@ -664,6 +681,7 @@ class Memory(MemoryBase):
                             metadata=deepcopy(metadata),
                         )
                         returned_memories.append({"id": memory_id, "memory": action_text, "event": event_type})
+                        record_memory_event("mem0.memory.created", memory_id=memory_id, operation="add")
                     elif event_type == "UPDATE":
                         # Ensure action_text has an embedding cached to avoid redundant API calls
                         if action_text not in new_message_embeddings:
@@ -682,6 +700,7 @@ class Memory(MemoryBase):
                                 "previous_memory": resp.get("old_memory"),
                             }
                         )
+                        record_memory_event("mem0.memory.updated", memory_id=temp_uuid_mapping[resp.get("id")], operation="update")
                     elif event_type == "DELETE":
                         self._delete_memory(memory_id=temp_uuid_mapping[resp.get("id")])
                         returned_memories.append(
@@ -691,9 +710,11 @@ class Memory(MemoryBase):
                                 "event": event_type,
                             }
                         )
+                        record_memory_event("mem0.memory.deleted", memory_id=temp_uuid_mapping[resp.get("id")], operation="delete")
                     elif event_type == "NONE":
                         # Even if content doesn't need updating, update session IDs if provided
                         memory_id = temp_uuid_mapping.get(resp.get("id"))
+                        record_memory_event("mem0.memory.noop", memory_id=memory_id, operation="noop")
                         if memory_id and (metadata.get("agent_id") or metadata.get("run_id")):
                             # Update only the session identifiers, keep content the same
                             existing_memory = self.vector_store.get(vector_id=memory_id)
@@ -742,6 +763,7 @@ class Memory(MemoryBase):
 
         return added_entities
 
+    @traced("get")
     def get(self, memory_id):
         """
         Retrieve a memory by ID.
@@ -785,6 +807,7 @@ class Memory(MemoryBase):
 
         return result_item
 
+    @traced("get_all")
     def get_all(
         self,
         *,
@@ -890,6 +913,7 @@ class Memory(MemoryBase):
 
         return formatted_memories
 
+    @traced("search")
     def search(
         self,
         query: str,
@@ -984,6 +1008,11 @@ class Memory(MemoryBase):
                 original_memories = reranked_memories
             except Exception as e:
                 logger.warning(f"Reranking failed, using original results: {e}")
+
+        set_search_result_attributes(
+            result_count=len(original_memories),
+            has_graph=bool(graph_entities) if graph_entities else False,
+        )
 
         if self.enable_graph:
             return {"results": original_memories, "relations": graph_entities}
@@ -1124,6 +1153,7 @@ class Memory(MemoryBase):
 
         return original_memories
 
+    @traced("update")
     def update(self, memory_id, data, metadata: Optional[Dict[str, Any]] = None):
         """
         Update a memory by ID.
@@ -1150,6 +1180,7 @@ class Memory(MemoryBase):
         self._update_memory(memory_id, data, existing_embeddings, metadata)
         return {"message": "Memory updated successfully!"}
 
+    @traced("delete")
     def delete(self, memory_id):
         """
         Delete a memory by ID.
@@ -1181,6 +1212,7 @@ class Memory(MemoryBase):
         self._delete_memory(memory_id, existing_memory)
         return {"message": "Memory deleted successfully!"}
 
+    @traced("delete_all")
     def delete_all(self, user_id: Optional[str] = None, agent_id: Optional[str] = None, run_id: Optional[str] = None):
         """
         Delete all memories.
@@ -1217,6 +1249,7 @@ class Memory(MemoryBase):
 
         return {"message": "Memories deleted successfully!"}
 
+    @traced("history")
     def history(self, memory_id):
         """
         Get the history of changes for a memory by ID.
@@ -1389,6 +1422,7 @@ class Memory(MemoryBase):
         )
         return memory_id
 
+    @traced("reset")
     def reset(self):
         """
         Reset the memory store by:
@@ -1468,6 +1502,14 @@ class AsyncMemory(MemoryBase):
             self._telemetry_vector_store = VectorStoreFactory.create(self.config.vector_store.provider, telemetry_config)
         capture_event("mem0.init", self, {"sync_type": "async"})
 
+        # OTel provider-level attributes (set once, attached to every span)
+        self._otel_provider_attrs = {
+            "mem0.collection": self.collection_name,
+            "mem0.vector_store.provider": self.config.vector_store.provider,
+            "mem0.llm.provider": self.config.llm.provider,
+            "mem0.embedder.provider": self.config.embedder.provider,
+        }
+
     @classmethod
     def from_config(cls, config_dict: Dict[str, Any]):
         try:
@@ -1514,6 +1556,7 @@ class AsyncMemory(MemoryBase):
         # Use agent memory extraction if agent_id is present and there are assistant messages
         return has_agent_id and has_assistant_messages
 
+    @async_traced("add")
     async def add(
         self,
         messages,
@@ -1625,6 +1668,7 @@ class AsyncMemory(MemoryBase):
                 msg_embeddings = await asyncio.to_thread(self.embedding_model.embed, msg_content, "add")
                 # Pass embeddings as a dict so _create_memory can reuse the cached embedding
                 mem_id = await self._create_memory(msg_content, {msg_content: msg_embeddings}, per_msg_meta)
+                record_memory_event("mem0.memory.created", memory_id=mem_id, operation="add")
 
                 returned_memories.append(
                     {
@@ -1817,6 +1861,7 @@ class AsyncMemory(MemoryBase):
                             task = asyncio.create_task(update_session_ids(memory_id, metadata))
                             memory_tasks.append((task, resp, "NONE", memory_id))
                         else:
+                            record_memory_event("mem0.memory.noop", memory_id=memory_id, operation="noop")
                             logger.info("NOOP for Memory (async).")
                 except Exception as e:
                     logger.error(f"Error processing memory action (async): {resp}, Error: {e}")
@@ -1826,6 +1871,7 @@ class AsyncMemory(MemoryBase):
                     result_id = await task
                     if event_type == "ADD":
                         returned_memories.append({"id": result_id, "memory": resp.get("text"), "event": event_type})
+                        record_memory_event("mem0.memory.created", memory_id=result_id, operation="add")
                     elif event_type == "UPDATE":
                         returned_memories.append(
                             {
@@ -1835,8 +1881,12 @@ class AsyncMemory(MemoryBase):
                                 "previous_memory": resp.get("old_memory"),
                             }
                         )
+                        record_memory_event("mem0.memory.updated", memory_id=mem_id, operation="update")
                     elif event_type == "DELETE":
                         returned_memories.append({"id": mem_id, "memory": resp.get("text"), "event": event_type})
+                        record_memory_event("mem0.memory.deleted", memory_id=mem_id, operation="delete")
+                    elif event_type == "NONE":
+                        record_memory_event("mem0.memory.noop", memory_id=mem_id, operation="noop")
                 except Exception as e:
                     logger.error(f"Error awaiting memory task (async): {e}")
         except Exception as e:
@@ -1861,6 +1911,7 @@ class AsyncMemory(MemoryBase):
 
         return added_entities
 
+    @async_traced("get")
     async def get(self, memory_id):
         """
         Retrieve a memory by ID asynchronously.
@@ -1904,6 +1955,7 @@ class AsyncMemory(MemoryBase):
 
         return result_item
 
+    @async_traced("get_all")
     async def get_all(
         self,
         *,
@@ -2014,6 +2066,7 @@ class AsyncMemory(MemoryBase):
 
         return formatted_memories
 
+    @async_traced("search")
     async def search(
         self,
         query: str,
@@ -2115,6 +2168,11 @@ class AsyncMemory(MemoryBase):
                 original_memories = reranked_memories
             except Exception as e:
                 logger.warning(f"Reranking failed, using original results: {e}")
+
+        set_search_result_attributes(
+            result_count=len(original_memories),
+            has_graph=bool(graph_entities) if graph_entities else False,
+        )
 
         if self.enable_graph:
             return {"results": original_memories, "relations": graph_entities}
@@ -2257,6 +2315,7 @@ class AsyncMemory(MemoryBase):
 
         return original_memories
 
+    @async_traced("update")
     async def update(self, memory_id, data, metadata: Optional[Dict[str, Any]] = None):
         """
         Update a memory by ID asynchronously.
@@ -2284,6 +2343,7 @@ class AsyncMemory(MemoryBase):
         await self._update_memory(memory_id, data, existing_embeddings, metadata)
         return {"message": "Memory updated successfully!"}
 
+    @async_traced("delete")
     async def delete(self, memory_id):
         """
         Delete a memory by ID asynchronously.
@@ -2315,6 +2375,7 @@ class AsyncMemory(MemoryBase):
         await self._delete_memory(memory_id, existing_memory)
         return {"message": "Memory deleted successfully!"}
 
+    @async_traced("delete_all")
     async def delete_all(self, user_id=None, agent_id=None, run_id=None):
         """
         Delete all memories asynchronously.
@@ -2354,6 +2415,7 @@ class AsyncMemory(MemoryBase):
 
         return {"message": "Memories deleted successfully!"}
 
+    @async_traced("history")
     async def history(self, memory_id):
         """
         Get the history of changes for a memory by ID asynchronously.
@@ -2550,6 +2612,7 @@ class AsyncMemory(MemoryBase):
 
         return memory_id
 
+    @async_traced("reset")
     async def reset(self):
         """
         Reset the memory store asynchronously by:
