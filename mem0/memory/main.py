@@ -27,6 +27,7 @@ from mem0.memory.telemetry import MEM0_TELEMETRY, capture_event
 from mem0.memory.otel import (
     async_traced,
     child_span,
+    log_otel_diagnostics,
     record_memory_event,
     set_search_result_attributes,
     traced,
@@ -324,6 +325,9 @@ class Memory(MemoryBase):
             "mem0.llm.provider": self.config.llm.provider,
             "mem0.embedder.provider": self.config.embedder.provider,
         }
+
+        # One-time OTel readiness diagnostic
+        log_otel_diagnostics()
 
     def _log_provider_config(self):
         """Log the configured LLM and embedding providers at startup for visibility."""
@@ -1509,6 +1513,9 @@ class AsyncMemory(MemoryBase):
             "mem0.llm.provider": self.config.llm.provider,
             "mem0.embedder.provider": self.config.embedder.provider,
         }
+
+        # One-time OTel readiness diagnostic
+        log_otel_diagnostics()
 
     @classmethod
     def from_config(cls, config_dict: Dict[str, Any]):

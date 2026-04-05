@@ -44,6 +44,111 @@ def is_otel_enabled() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Startup diagnostics
+# ---------------------------------------------------------------------------
+
+# Well-known OTel / Azure Monitor env vars to surface in the diagnostic log.
+_OTEL_ENV_VARS = (
+    "OTEL_SERVICE_NAME",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_HEADERS",
+    "OTEL_TRACES_EXPORTER",
+    "OTEL_METRICS_EXPORTER",
+    "APPLICATIONINSIGHTS_CONNECTION_STRING",
+)
+
+_diagnostics_logged = False
+
+
+def log_otel_diagnostics() -> None:
+    """Log a one-time startup summary of OpenTelemetry readiness.
+
+    Emits an INFO-level message describing:
+    * whether the ``opentelemetry`` package is installed,
+    * whether instrumentation is enabled or opted-out,
+    * which OTel / Azure Monitor environment variables are set,
+    * whether a real ``TracerProvider`` (not the default no-op) is active.
+
+    Safe to call multiple times — only logs once per process.
+    """
+    global _diagnostics_logged
+    if _diagnostics_logged:
+        return
+    _diagnostics_logged = True
+
+    if not _OTEL_AVAILABLE:
+        logger.info(
+            "mem0 OpenTelemetry: DISABLED — 'opentelemetry-api' package is not installed. "
+            "Install with: pip install \"mem0ai[telemetry]\" (or pip install opentelemetry-api opentelemetry-sdk)"
+        )
+        return
+
+    if not _OTEL_ENABLED:
+        logger.info(
+            "mem0 OpenTelemetry: DISABLED — opted out via MEM0_OTEL_ENABLED=%s",
+            os.environ.get("MEM0_OTEL_ENABLED", ""),
+        )
+        return
+
+    # OTel is available & enabled — report env vars and provider status.
+    env_present = {var: os.environ[var] for var in _OTEL_ENV_VARS if var in os.environ}
+    env_missing = [var for var in _OTEL_ENV_VARS if var not in os.environ]
+
+    # Check whether a real (non-default) TracerProvider has been configured.
+    has_real_provider = False
+    provider_name = "unknown"
+    try:
+        tp = trace.get_tracer_provider()
+        provider_name = type(tp).__name__
+        # The SDK's ProxyTracerProvider wraps the real one — check for that too.
+        has_real_provider = provider_name not in ("NoOpTracerProvider", "ProxyTracerProvider")
+    except Exception:
+        pass
+
+    # Build log lines
+    lines = ["mem0 OpenTelemetry: ENABLED"]
+
+    if env_present:
+        # Mask sensitive values (connection strings, headers, etc.)
+        safe_vars = []
+        for k, v in env_present.items():
+            if any(s in k.upper() for s in ("KEY", "SECRET", "TOKEN", "PASSWORD", "CONNECTION_STRING", "HEADERS")):
+                safe_vars.append(f"{k}=<set>")
+            else:
+                safe_vars.append(f"{k}={v}")
+        lines.append(f"  Environment variables: {', '.join(safe_vars)}")
+    else:
+        lines.append(
+            "  Environment variables: none of the standard OTEL_*/APPLICATIONINSIGHTS_* vars are set."
+        )
+
+    if has_real_provider:
+        lines.append(f"  TracerProvider: {provider_name} (OK — traces will be exported)")
+    else:
+        lines.append(
+            f"  TracerProvider: {provider_name} (no SDK provider configured yet — "
+            "traces will be collected once the host process sets up a TracerProvider, "
+            "e.g. via opentelemetry-sdk or azure-monitor-opentelemetry-exporter)"
+        )
+
+    # Actionable hints for common misconfigurations
+    hints = []
+    if "OTEL_EXPORTER_OTLP_ENDPOINT" not in os.environ and "APPLICATIONINSIGHTS_CONNECTION_STRING" not in os.environ:
+        hints.append(
+            "Hint: Set OTEL_EXPORTER_OTLP_ENDPOINT or APPLICATIONINSIGHTS_CONNECTION_STRING "
+            "so the host process knows where to send telemetry."
+        )
+    if "OTEL_SERVICE_NAME" not in os.environ:
+        hints.append("Hint: Set OTEL_SERVICE_NAME to identify this service in your telemetry backend.")
+    for hint in hints:
+        lines.append(f"  {hint}")
+
+    logger.info("\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
 # Tracer & Meter singletons (no-ops when disabled)
 # ---------------------------------------------------------------------------
 

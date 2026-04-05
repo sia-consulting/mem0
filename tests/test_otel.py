@@ -1,6 +1,7 @@
 """Tests for mem0 OpenTelemetry instrumentation (mem0/memory/otel.py)."""
 
 import importlib
+import logging
 import os
 import sys
 from unittest.mock import MagicMock, patch
@@ -568,3 +569,144 @@ class TestTracerName:
 
         spans = otel_setup["span_exporter"].get_finished_spans()
         assert spans[0].instrumentation_scope.name == "mem0"
+
+
+# ---------------------------------------------------------------------------
+# Tests: Startup diagnostics (log_otel_diagnostics)
+# ---------------------------------------------------------------------------
+
+
+class TestOtelDiagnostics:
+    """Verify log_otel_diagnostics() output for various configurations."""
+
+    def _reset_diagnostics(self):
+        """Reset the one-time guard so diagnostics can be re-tested."""
+        import mem0.memory.otel as otel_mod
+        otel_mod._diagnostics_logged = False
+
+    def test_logs_disabled_when_otel_not_installed(self, caplog):
+        """Should log 'DISABLED' with install hint when OTel is not available."""
+        import mem0.memory.otel as otel_mod
+
+        orig_avail = otel_mod._OTEL_AVAILABLE
+        orig_enabled = otel_mod._OTEL_ENABLED
+        self._reset_diagnostics()
+        try:
+            otel_mod._OTEL_AVAILABLE = False
+            otel_mod._OTEL_ENABLED = False
+
+            with caplog.at_level(logging.INFO, logger="mem0.memory.otel"):
+                otel_mod.log_otel_diagnostics()
+
+            assert "DISABLED" in caplog.text
+            assert "not installed" in caplog.text
+            assert "pip install" in caplog.text
+        finally:
+            otel_mod._OTEL_AVAILABLE = orig_avail
+            otel_mod._OTEL_ENABLED = orig_enabled
+            self._reset_diagnostics()
+
+    def test_logs_disabled_when_opted_out(self, caplog):
+        """Should log 'DISABLED' with opted-out message."""
+        import mem0.memory.otel as otel_mod
+
+        orig_avail = otel_mod._OTEL_AVAILABLE
+        orig_enabled = otel_mod._OTEL_ENABLED
+        self._reset_diagnostics()
+        try:
+            otel_mod._OTEL_AVAILABLE = True
+            otel_mod._OTEL_ENABLED = False
+
+            with patch.dict(os.environ, {"MEM0_OTEL_ENABLED": "false"}):
+                with caplog.at_level(logging.INFO, logger="mem0.memory.otel"):
+                    otel_mod.log_otel_diagnostics()
+
+            assert "DISABLED" in caplog.text
+            assert "opted out" in caplog.text
+        finally:
+            otel_mod._OTEL_AVAILABLE = orig_avail
+            otel_mod._OTEL_ENABLED = orig_enabled
+            self._reset_diagnostics()
+
+    def test_logs_enabled_with_env_vars(self, caplog, otel_setup):
+        """Should log 'ENABLED' and list detected env vars."""
+        import mem0.memory.otel as otel_mod
+
+        self._reset_diagnostics()
+        env = {
+            "OTEL_SERVICE_NAME": "my-service",
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
+        }
+        try:
+            with patch.dict(os.environ, env, clear=False):
+                with caplog.at_level(logging.INFO, logger="mem0.memory.otel"):
+                    otel_mod.log_otel_diagnostics()
+
+            assert "ENABLED" in caplog.text
+            assert "OTEL_SERVICE_NAME=my-service" in caplog.text
+            assert "OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317" in caplog.text
+        finally:
+            self._reset_diagnostics()
+
+    def test_masks_sensitive_env_vars(self, caplog, otel_setup):
+        """Sensitive env vars (connection strings, headers) should be masked."""
+        import mem0.memory.otel as otel_mod
+
+        self._reset_diagnostics()
+        env = {
+            "APPLICATIONINSIGHTS_CONNECTION_STRING": "InstrumentationKey=secret123",
+            "OTEL_EXPORTER_OTLP_HEADERS": "api-key=supersecret",
+        }
+        try:
+            with patch.dict(os.environ, env, clear=False):
+                with caplog.at_level(logging.INFO, logger="mem0.memory.otel"):
+                    otel_mod.log_otel_diagnostics()
+
+            assert "ENABLED" in caplog.text
+            assert "APPLICATIONINSIGHTS_CONNECTION_STRING=<set>" in caplog.text
+            assert "OTEL_EXPORTER_OTLP_HEADERS=<set>" in caplog.text
+            assert "secret123" not in caplog.text
+            assert "supersecret" not in caplog.text
+        finally:
+            self._reset_diagnostics()
+
+    def test_logs_hints_when_no_endpoint(self, caplog, otel_setup):
+        """Should show hints when no exporter endpoint is configured."""
+        import mem0.memory.otel as otel_mod
+
+        self._reset_diagnostics()
+        # Clear all OTel env vars to trigger hints
+        remove_vars = {var: "" for var in otel_mod._OTEL_ENV_VARS}
+        try:
+            with patch.dict(os.environ, {}, clear=False):
+                # Remove any OTel vars that might be set
+                for var in otel_mod._OTEL_ENV_VARS:
+                    os.environ.pop(var, None)
+                with caplog.at_level(logging.INFO, logger="mem0.memory.otel"):
+                    otel_mod.log_otel_diagnostics()
+
+            assert "ENABLED" in caplog.text
+            assert "Hint:" in caplog.text
+            assert "OTEL_EXPORTER_OTLP_ENDPOINT" in caplog.text
+            assert "OTEL_SERVICE_NAME" in caplog.text
+        finally:
+            self._reset_diagnostics()
+
+    def test_only_logs_once(self, caplog, otel_setup):
+        """log_otel_diagnostics should only emit output once per process."""
+        import mem0.memory.otel as otel_mod
+
+        self._reset_diagnostics()
+        try:
+            with caplog.at_level(logging.INFO, logger="mem0.memory.otel"):
+                otel_mod.log_otel_diagnostics()
+                first_output = caplog.text
+                caplog.clear()
+                otel_mod.log_otel_diagnostics()
+                second_output = caplog.text
+
+            assert "ENABLED" in first_output or "DISABLED" in first_output
+            # Second call should produce no output
+            assert second_output == ""
+        finally:
+            self._reset_diagnostics()
