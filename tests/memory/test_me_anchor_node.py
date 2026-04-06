@@ -362,13 +362,14 @@ class TestGetMeNode:
         assert dest_props.get("color") == "blue"
 
     def test_get_me_node_passes_depth_param(self, memory_graph):
-        """depth parameter is forwarded to the Cypher query."""
+        """depth parameter is interpolated into the Cypher query."""
         memory_graph.graph.query.return_value = []
 
         memory_graph.get_me_node({"user_id": "u1"}, depth=3)
 
-        params = memory_graph.graph.query.call_args[1]["params"]
-        assert params["depth"] == 3
+        cypher = memory_graph.graph.query.call_args[0][0]
+        # depth is interpolated directly into Cypher (not as a parameter)
+        assert "*1..3" in cypher
 
     def test_get_me_node_scoped_by_agent_id(self, memory_graph):
         """agent_id is included in the query when present."""

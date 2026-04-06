@@ -995,10 +995,11 @@ class MemoryGraph:
             Returns ``None`` if no "Me" node exists for the scope.
         """
         anchor_name = self.anchor_node_name
+        depth = max(1, int(depth))  # Sanitize: must be positive integer
 
         # Build match conditions for the anchor node
         me_props = ["name: $anchor_name", "user_id: $user_id"]
-        params = {"anchor_name": anchor_name, "user_id": filters["user_id"], "depth": depth}
+        params = {"anchor_name": anchor_name, "user_id": filters["user_id"]}
         if filters.get("agent_id"):
             me_props.append("agent_id: $agent_id")
             params["agent_id"] = filters["agent_id"]
@@ -1007,18 +1008,21 @@ class MemoryGraph:
             params["run_id"] = filters["run_id"]
         me_props_str = ", ".join(me_props)
 
-        # Variable-length path: 1..depth hops
+        # Variable-length path: 1..depth hops.
+        # Neo4j does not support parameterized bounds in variable-length paths,
+        # so we interpolate depth (validated int) directly into the Cypher string.
+        # r is always a list of relationships from the *1..N pattern.
         cypher = f"""
         MATCH (me {self.node_label} {{{me_props_str}}})
-        OPTIONAL MATCH (me)-[r*1..$depth]->(neighbor {self.node_label})
-        WHERE ALL(rel IN r WHERE rel.valid IS NULL OR rel.valid = true)
-        WITH me, r, neighbor
+        OPTIONAL MATCH path = (me)-[*1..{depth}]->(neighbor {self.node_label})
+        WHERE ALL(rel IN relationships(path) WHERE rel.valid IS NULL OR rel.valid = true)
+        WITH me, relationships(path) AS rels, neighbor
         RETURN me {{.name, .entity_type, .is_anchor, .created}} AS me_node,
                CASE WHEN neighbor IS NOT NULL THEN {{
                    source: me.name,
-                   relationship: type(last(r)),
+                   relationship: type(last(rels)),
                    destination: neighbor.name,
-                   edge_properties: properties(last(r)),
+                   edge_properties: properties(last(rels)),
                    destination_properties: properties(neighbor)
                }} ELSE null END AS connection
         """
