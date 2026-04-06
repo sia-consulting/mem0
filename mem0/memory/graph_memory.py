@@ -1053,6 +1053,346 @@ class MemoryGraph:
 
         return {"me": dict(me_data) if me_data else {}, "connections": connections}
 
+    # ------------------------------------------------------------------
+    # Phase 3 — Multi-hop graph walking
+    # ------------------------------------------------------------------
+
+    def _build_scope_filter(self, alias, filters, *, include_name=None):
+        """Build a Cypher WHERE clause and params dict for scope filtering.
+
+        Args:
+            alias (str): The Cypher variable alias (e.g. ``"n"``).
+            filters (dict): Scope filters (user_id, agent_id, run_id).
+            include_name (str | None): If given, add a ``name`` equality check.
+
+        Returns:
+            tuple[str, dict]: ``(where_clause, params)``
+        """
+        parts = [f"{alias}.user_id = $user_id"]
+        params = {"user_id": filters["user_id"]}
+        if filters.get("agent_id"):
+            parts.append(f"{alias}.agent_id = $agent_id")
+            params["agent_id"] = filters["agent_id"]
+        if filters.get("run_id"):
+            parts.append(f"{alias}.run_id = $run_id")
+            params["run_id"] = filters["run_id"]
+        if include_name is not None:
+            parts.append(f"{alias}.name = $node_name")
+            params["node_name"] = include_name
+        return " AND ".join(parts), params
+
+    def get_node(self, node_name, filters):
+        """Retrieve a specific node by name with all its properties and edge count.
+
+        Args:
+            node_name (str): Name of the node to retrieve.
+            filters (dict): Scope filters (user_id, agent_id, run_id).
+
+        Returns:
+            dict | None: Node info with ``name``, ``entity_type``, ``properties``,
+            ``edge_count`` and ``is_anchor`` flag.  ``None`` if not found.
+        """
+        where_clause, params = self._build_scope_filter("n", filters, include_name=node_name)
+
+        cypher = f"""
+        MATCH (n {self.node_label})
+        WHERE {where_clause}
+        OPTIONAL MATCH (n)-[r]-()
+        WHERE r.valid IS NULL OR r.valid = true
+        RETURN n AS node, properties(n) AS props, count(r) AS edge_count
+        """
+
+        results = self.graph.query(cypher, params=params)
+        if not results:
+            return None
+
+        row = results[0]
+        all_props = row.get("props") or {}
+        user_props = {k: v for k, v in all_props.items() if k not in _SYSTEM_RESERVED_KEYS}
+
+        return {
+            "name": all_props.get("name", node_name),
+            "entity_type": all_props.get("entity_type"),
+            "is_anchor": bool(all_props.get("is_anchor")),
+            "properties": user_props,
+            "edge_count": row.get("edge_count", 0),
+        }
+
+    def get_neighbors(self, node_name, filters, direction="both",
+                      relationship_type=None, limit=100):
+        """Get all nodes directly connected to a given node (1-hop).
+
+        Args:
+            node_name (str): Starting node name.
+            filters (dict): Scope filters.
+            direction (str): ``"outgoing"``, ``"incoming"`` or ``"both"`` (default).
+            relationship_type (str | None): Optional relationship type filter.
+            limit (int): Maximum neighbours to return.
+
+        Returns:
+            list[dict]: Each entry has ``source``, ``relationship``,
+            ``destination``, and optional ``edge_properties`` /
+            ``destination_properties`` dicts.
+        """
+        where_clause, params = self._build_scope_filter("n", filters, include_name=node_name)
+        params["limit"] = limit
+
+        # Build relationship type filter
+        rel_type_fragment = f":{relationship_type}" if relationship_type else ""
+
+        # Direction-specific match patterns
+        if direction == "outgoing":
+            match = f"(n)-[r{rel_type_fragment}]->(neighbor {self.node_label})"
+            return_clause = "n.name AS source, type(r) AS relationship, neighbor.name AS destination"
+        elif direction == "incoming":
+            match = f"(n)<-[r{rel_type_fragment}]-(neighbor {self.node_label})"
+            return_clause = "neighbor.name AS source, type(r) AS relationship, n.name AS destination"
+        else:  # both
+            match = f"(n)-[r{rel_type_fragment}]-(neighbor {self.node_label})"
+            # For undirected match, determine direction from startNode
+            return_clause = (
+                "CASE WHEN startNode(r) = n THEN n.name ELSE neighbor.name END AS source, "
+                "type(r) AS relationship, "
+                "CASE WHEN startNode(r) = n THEN neighbor.name ELSE n.name END AS destination"
+            )
+
+        cypher = f"""
+        MATCH (n {self.node_label})
+        WHERE {where_clause}
+        MATCH {match}
+        WHERE (r.valid IS NULL OR r.valid = true)
+        RETURN {return_clause},
+               properties(r) AS edge_properties,
+               properties(neighbor) AS neighbor_properties
+        LIMIT $limit
+        """
+
+        results = self.graph.query(cypher, params=params)
+
+        neighbors = []
+        for row in results:
+            entry = {
+                "source": row["source"],
+                "relationship": row["relationship"],
+                "destination": row["destination"],
+            }
+            edge_props = {k: v for k, v in (row.get("edge_properties") or {}).items() if k not in _SYSTEM_RESERVED_KEYS}
+            dest_props = {k: v for k, v in (row.get("neighbor_properties") or {}).items() if k not in _SYSTEM_RESERVED_KEYS}
+            if edge_props:
+                entry["edge_properties"] = edge_props
+            if dest_props:
+                entry["destination_properties"] = dest_props
+            neighbors.append(entry)
+
+        return neighbors
+
+    def walk(self, start_node, filters, depth=2, relationship_type=None, limit=100):
+        """Walk the graph from a starting node up to N hops.
+
+        Uses Cypher variable-length paths.  Only follows edges where
+        ``valid`` is null or true (soft-deleted edges are skipped).
+
+        Args:
+            start_node (str): Name of the starting node.
+            filters (dict): Scope filters.
+            depth (int): Maximum hops (1-5, default 2).
+            relationship_type (str | None): Optional relationship type filter.
+            limit (int): Maximum result rows.
+
+        Returns:
+            list[dict]: Each entry has ``source``, ``relationship``,
+            ``destination``, optional ``edge_properties`` /
+            ``destination_properties``, and ``depth`` (hop count from start).
+        """
+        depth = max(1, min(5, int(depth)))  # Clamp 1..5
+        where_clause, params = self._build_scope_filter("start", filters, include_name=start_node)
+        params["limit"] = limit
+
+        rel_type_fragment = f":{relationship_type}" if relationship_type else ""
+
+        # Neo4j doesn't support parameterized variable-length bounds,
+        # so we interpolate the validated int directly.
+        cypher = f"""
+        MATCH (start {self.node_label})
+        WHERE {where_clause}
+        MATCH path = (start)-[{rel_type_fragment}*1..{depth}]-(end {self.node_label})
+        WHERE ALL(rel IN relationships(path) WHERE rel.valid IS NULL OR rel.valid = true)
+        WITH path, end, relationships(path) AS rels, length(path) AS hop_depth
+        UNWIND range(0, size(rels) - 1) AS idx
+        WITH rels[idx] AS r, nodes(path)[idx] AS src, nodes(path)[idx + 1] AS dst, hop_depth
+        RETURN DISTINCT
+            src.name AS source,
+            type(r) AS relationship,
+            dst.name AS destination,
+            properties(r) AS edge_properties,
+            properties(dst) AS destination_properties,
+            hop_depth AS depth
+        LIMIT $limit
+        """
+
+        results = self.graph.query(cypher, params=params)
+
+        walked = []
+        for row in results:
+            entry = {
+                "source": row["source"],
+                "relationship": row["relationship"],
+                "destination": row["destination"],
+                "depth": row.get("depth", 1),
+            }
+            edge_props = {k: v for k, v in (row.get("edge_properties") or {}).items() if k not in _SYSTEM_RESERVED_KEYS}
+            dest_props = {k: v for k, v in (row.get("destination_properties") or {}).items() if k not in _SYSTEM_RESERVED_KEYS}
+            if edge_props:
+                entry["edge_properties"] = edge_props
+            if dest_props:
+                entry["destination_properties"] = dest_props
+            walked.append(entry)
+
+        return walked
+
+    def find_path(self, from_node, to_node, filters, max_depth=5):
+        """Find the shortest path between two nodes.
+
+        Uses Cypher's ``shortestPath()`` function.  Only traverses edges
+        where ``valid`` is null or true.
+
+        Args:
+            from_node (str): Source node name.
+            to_node (str): Target node name.
+            filters (dict): Scope filters.
+            max_depth (int): Maximum path length (default 5).
+
+        Returns:
+            list[dict] | None: Ordered list of hops from source to target,
+            each with ``source``, ``relationship``, ``destination`` and
+            optional property dicts.  ``None`` if no path exists.
+        """
+        max_depth = max(1, min(10, int(max_depth)))  # Clamp 1..10
+        from_where, params = self._build_scope_filter("a", filters, include_name=from_node)
+
+        # Add to_node param with a distinct name
+        to_parts = ["b.user_id = $user_id"]
+        params["to_node_name"] = to_node
+        if filters.get("agent_id"):
+            to_parts.append("b.agent_id = $agent_id")
+        if filters.get("run_id"):
+            to_parts.append("b.run_id = $run_id")
+        to_parts.append("b.name = $to_node_name")
+        to_where = " AND ".join(to_parts)
+
+        cypher = f"""
+        MATCH (a {self.node_label}), (b {self.node_label})
+        WHERE {from_where} AND {to_where}
+        MATCH path = shortestPath((a)-[*1..{max_depth}]-(b))
+        WHERE ALL(rel IN relationships(path) WHERE rel.valid IS NULL OR rel.valid = true)
+        RETURN relationships(path) AS rels, nodes(path) AS path_nodes
+        """
+
+        results = self.graph.query(cypher, params=params)
+        if not results:
+            return None
+
+        row = results[0]
+        rels = row.get("rels", [])
+        path_nodes = row.get("path_nodes", [])
+
+        hops = []
+        for i, rel in enumerate(rels):
+            rel_props = dict(rel) if hasattr(rel, '__iter__') and not isinstance(rel, str) else {}
+            src_node = path_nodes[i] if i < len(path_nodes) else {}
+            dst_node = path_nodes[i + 1] if (i + 1) < len(path_nodes) else {}
+
+            # Extract names — handle both dict and Neo4j node objects
+            src_name = src_node.get("name", "") if isinstance(src_node, dict) else getattr(src_node, "name", str(src_node))
+            dst_name = dst_node.get("name", "") if isinstance(dst_node, dict) else getattr(dst_node, "name", str(dst_node))
+
+            # Relationship type — handle both str and Neo4j relationship objects
+            rel_type = rel_props.pop("type", None) or (type(rel).__name__ if not isinstance(rel, dict) else "")
+            # If it's a Neo4j relationship, try to get the type
+            if hasattr(rel, "type"):
+                rel_type = rel.type
+
+            edge_props = {k: v for k, v in rel_props.items() if k not in _SYSTEM_RESERVED_KEYS}
+            dst_props_raw = dict(dst_node) if isinstance(dst_node, dict) else {}
+            dst_props = {k: v for k, v in dst_props_raw.items() if k not in _SYSTEM_RESERVED_KEYS}
+
+            entry = {
+                "source": src_name,
+                "relationship": rel_type,
+                "destination": dst_name,
+            }
+            if edge_props:
+                entry["edge_properties"] = edge_props
+            if dst_props:
+                entry["destination_properties"] = dst_props
+            hops.append(entry)
+
+        return hops
+
+    def get_edges(self, node_name, filters, direction="both",
+                  relationship_type=None, include_invalid=False, limit=100):
+        """Get all edges for a node with optional filtering.
+
+        Args:
+            node_name (str): Node name.
+            filters (dict): Scope filters.
+            direction (str): ``"outgoing"``, ``"incoming"`` or ``"both"`` (default).
+            relationship_type (str | None): Optional relationship type filter.
+            include_invalid (bool): If True, also return soft-deleted edges.
+            limit (int): Maximum edges to return.
+
+        Returns:
+            list[dict]: Each entry has ``source``, ``relationship``,
+            ``destination``, ``valid``, and optional ``edge_properties`` dict.
+        """
+        where_clause, params = self._build_scope_filter("n", filters, include_name=node_name)
+        params["limit"] = limit
+
+        rel_type_fragment = f":{relationship_type}" if relationship_type else ""
+        valid_filter = "" if include_invalid else "AND (r.valid IS NULL OR r.valid = true)"
+
+        if direction == "outgoing":
+            match = f"(n)-[r{rel_type_fragment}]->(other {self.node_label})"
+            return_clause = "n.name AS source, type(r) AS relationship, other.name AS destination"
+        elif direction == "incoming":
+            match = f"(n)<-[r{rel_type_fragment}]-(other {self.node_label})"
+            return_clause = "other.name AS source, type(r) AS relationship, n.name AS destination"
+        else:
+            match = f"(n)-[r{rel_type_fragment}]-(other {self.node_label})"
+            return_clause = (
+                "CASE WHEN startNode(r) = n THEN n.name ELSE other.name END AS source, "
+                "type(r) AS relationship, "
+                "CASE WHEN startNode(r) = n THEN other.name ELSE n.name END AS destination"
+            )
+
+        cypher = f"""
+        MATCH (n {self.node_label})
+        WHERE {where_clause}
+        MATCH {match}
+        WHERE true {valid_filter}
+        RETURN {return_clause},
+               properties(r) AS edge_properties,
+               r.valid AS valid
+        LIMIT $limit
+        """
+
+        results = self.graph.query(cypher, params=params)
+
+        edges = []
+        for row in results:
+            entry = {
+                "source": row["source"],
+                "relationship": row["relationship"],
+                "destination": row["destination"],
+                "valid": row.get("valid") is not False,  # None → True (legacy)
+            }
+            edge_props = {k: v for k, v in (row.get("edge_properties") or {}).items() if k not in _SYSTEM_RESERVED_KEYS}
+            if edge_props:
+                entry["edge_properties"] = edge_props
+            edges.append(entry)
+
+        return edges
+
     def _remove_spaces_from_entities(self, entity_list):
         return remove_spaces_from_entities(entity_list, sanitize_relationship=True)
 

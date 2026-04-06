@@ -1426,6 +1426,79 @@ class Memory(MemoryBase):
         )
         return memory_id
 
+    # ------------------------------------------------------------------
+    # Phase 3 — Graph walking public API
+    # ------------------------------------------------------------------
+
+    @traced("graph_get_node")
+    def graph_get_node(self, node_name, *, user_id=None, agent_id=None, run_id=None):
+        """Retrieve a specific graph node by name.
+
+        Returns:
+            dict | None: Node info or None if not found / graph not enabled.
+        """
+        if not self.enable_graph:
+            return None
+        _, filters = _build_filters_and_metadata(user_id=user_id, agent_id=agent_id, run_id=run_id)
+        return self.graph.get_node(node_name, filters)
+
+    @traced("graph_get_neighbors")
+    def graph_get_neighbors(self, node_name, *, user_id=None, agent_id=None, run_id=None,
+                            direction="both", relationship_type=None, limit=100):
+        """Get nodes directly connected to a given node.
+
+        Returns:
+            list[dict]: Neighbor entries.
+        """
+        if not self.enable_graph:
+            return []
+        _, filters = _build_filters_and_metadata(user_id=user_id, agent_id=agent_id, run_id=run_id)
+        return self.graph.get_neighbors(node_name, filters, direction=direction,
+                                        relationship_type=relationship_type, limit=limit)
+
+    @traced("graph_walk")
+    def graph_walk(self, start_node, *, user_id=None, agent_id=None, run_id=None,
+                   depth=2, relationship_type=None, limit=100):
+        """Walk the graph from a starting node up to *depth* hops.
+
+        Returns:
+            list[dict]: Walked edges with depth info.
+        """
+        if not self.enable_graph:
+            return []
+        _, filters = _build_filters_and_metadata(user_id=user_id, agent_id=agent_id, run_id=run_id)
+        return self.graph.walk(start_node, filters, depth=depth,
+                               relationship_type=relationship_type, limit=limit)
+
+    @traced("graph_find_path")
+    def graph_find_path(self, from_node, to_node, *, user_id=None, agent_id=None, run_id=None,
+                        max_depth=5):
+        """Find the shortest path between two nodes.
+
+        Returns:
+            list[dict] | None: Ordered hops or None if no path found.
+        """
+        if not self.enable_graph:
+            return None
+        _, filters = _build_filters_and_metadata(user_id=user_id, agent_id=agent_id, run_id=run_id)
+        return self.graph.find_path(from_node, to_node, filters, max_depth=max_depth)
+
+    @traced("graph_get_edges")
+    def graph_get_edges(self, node_name, *, user_id=None, agent_id=None, run_id=None,
+                        direction="both", relationship_type=None, include_invalid=False,
+                        limit=100):
+        """Get all edges for a node with optional filtering.
+
+        Returns:
+            list[dict]: Edge entries.
+        """
+        if not self.enable_graph:
+            return []
+        _, filters = _build_filters_and_metadata(user_id=user_id, agent_id=agent_id, run_id=run_id)
+        return self.graph.get_edges(node_name, filters, direction=direction,
+                                    relationship_type=relationship_type,
+                                    include_invalid=include_invalid, limit=limit)
+
     @traced("reset")
     def reset(self):
         """
@@ -2618,6 +2691,84 @@ class AsyncMemory(MemoryBase):
         )
 
         return memory_id
+
+    # ------------------------------------------------------------------
+    # Phase 3 — Graph walking public API (async)
+    # ------------------------------------------------------------------
+
+    @async_traced("graph_get_node")
+    async def graph_get_node(self, node_name, *, user_id=None, agent_id=None, run_id=None):
+        """Retrieve a specific graph node by name (async).
+
+        Returns:
+            dict | None: Node info or None if not found / graph not enabled.
+        """
+        if not self.enable_graph:
+            return None
+        _, filters = _build_filters_and_metadata(user_id=user_id, agent_id=agent_id, run_id=run_id)
+        return await asyncio.to_thread(self.graph.get_node, node_name, filters)
+
+    @async_traced("graph_get_neighbors")
+    async def graph_get_neighbors(self, node_name, *, user_id=None, agent_id=None, run_id=None,
+                                  direction="both", relationship_type=None, limit=100):
+        """Get nodes directly connected to a given node (async).
+
+        Returns:
+            list[dict]: Neighbor entries.
+        """
+        if not self.enable_graph:
+            return []
+        _, filters = _build_filters_and_metadata(user_id=user_id, agent_id=agent_id, run_id=run_id)
+        return await asyncio.to_thread(
+            self.graph.get_neighbors, node_name, filters,
+            direction, relationship_type, limit,
+        )
+
+    @async_traced("graph_walk")
+    async def graph_walk(self, start_node, *, user_id=None, agent_id=None, run_id=None,
+                         depth=2, relationship_type=None, limit=100):
+        """Walk the graph from a starting node up to *depth* hops (async).
+
+        Returns:
+            list[dict]: Walked edges with depth info.
+        """
+        if not self.enable_graph:
+            return []
+        _, filters = _build_filters_and_metadata(user_id=user_id, agent_id=agent_id, run_id=run_id)
+        return await asyncio.to_thread(
+            self.graph.walk, start_node, filters,
+            depth, relationship_type, limit,
+        )
+
+    @async_traced("graph_find_path")
+    async def graph_find_path(self, from_node, to_node, *, user_id=None, agent_id=None, run_id=None,
+                              max_depth=5):
+        """Find the shortest path between two nodes (async).
+
+        Returns:
+            list[dict] | None: Ordered hops or None if no path found.
+        """
+        if not self.enable_graph:
+            return None
+        _, filters = _build_filters_and_metadata(user_id=user_id, agent_id=agent_id, run_id=run_id)
+        return await asyncio.to_thread(self.graph.find_path, from_node, to_node, filters, max_depth)
+
+    @async_traced("graph_get_edges")
+    async def graph_get_edges(self, node_name, *, user_id=None, agent_id=None, run_id=None,
+                              direction="both", relationship_type=None, include_invalid=False,
+                              limit=100):
+        """Get all edges for a node with optional filtering (async).
+
+        Returns:
+            list[dict]: Edge entries.
+        """
+        if not self.enable_graph:
+            return []
+        _, filters = _build_filters_and_metadata(user_id=user_id, agent_id=agent_id, run_id=run_id)
+        return await asyncio.to_thread(
+            self.graph.get_edges, node_name, filters,
+            direction, relationship_type, include_invalid, limit,
+        )
 
     @async_traced("reset")
     async def reset(self):
