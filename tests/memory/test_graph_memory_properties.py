@@ -240,7 +240,7 @@ class TestEstablishRelationsWithProperties:
         """Struct tool returns properties_json."""
         memory_graph.llm.generate_response.return_value = {
             "tool_calls": [{
-                "name": "establish_relations",
+                "name": "establish_relationships",
                 "arguments": {
                     "entities": [
                         {
@@ -484,3 +484,91 @@ class TestRemoveSpacesPreservesProperties:
         assert result[0]["edge_properties"] == {"since": "2024"}
         assert result[0]["source"] == "alice"
         assert result[0]["destination"] == "acme_corp"
+
+
+# ---------------------------------------------------------------------------
+# Structured output tool consistency
+# ---------------------------------------------------------------------------
+
+class TestStructuredToolConsistency:
+    """Verify struct and non-struct tool variants are consistent."""
+
+    def test_tool_names_match(self):
+        """Struct and non-struct tool variants must have the same function name."""
+        from mem0.graphs.tools import (
+            EXTRACT_ENTITIES_TOOL, EXTRACT_ENTITIES_STRUCT_TOOL,
+            RELATIONS_TOOL, RELATIONS_STRUCT_TOOL,
+            DELETE_MEMORY_TOOL_GRAPH, DELETE_MEMORY_STRUCT_TOOL_GRAPH,
+            UPDATE_MEMORY_TOOL_GRAPH, UPDATE_MEMORY_STRUCT_TOOL_GRAPH,
+            NOOP_TOOL, NOOP_STRUCT_TOOL,
+            ADD_MEMORY_TOOL_GRAPH, ADD_MEMORY_STRUCT_TOOL_GRAPH,
+        )
+        pairs = [
+            (EXTRACT_ENTITIES_TOOL, EXTRACT_ENTITIES_STRUCT_TOOL, "extract_entities"),
+            (RELATIONS_TOOL, RELATIONS_STRUCT_TOOL, "establish_relationships"),
+            (DELETE_MEMORY_TOOL_GRAPH, DELETE_MEMORY_STRUCT_TOOL_GRAPH, "delete_graph_memory"),
+            (UPDATE_MEMORY_TOOL_GRAPH, UPDATE_MEMORY_STRUCT_TOOL_GRAPH, "update_graph_memory"),
+            (NOOP_TOOL, NOOP_STRUCT_TOOL, "noop"),
+            (ADD_MEMORY_TOOL_GRAPH, ADD_MEMORY_STRUCT_TOOL_GRAPH, "add_graph_memory"),
+        ]
+        for non_struct, struct, expected_name in pairs:
+            assert non_struct["function"]["name"] == expected_name, (
+                f"Non-struct tool name mismatch: {non_struct['function']['name']} != {expected_name}"
+            )
+            assert struct["function"]["name"] == expected_name, (
+                f"Struct tool name mismatch: {struct['function']['name']} != {expected_name}"
+            )
+
+    def test_struct_tools_have_strict_true(self):
+        """All struct tool variants must have strict: True."""
+        from mem0.graphs.tools import (
+            EXTRACT_ENTITIES_STRUCT_TOOL, RELATIONS_STRUCT_TOOL,
+            DELETE_MEMORY_STRUCT_TOOL_GRAPH, UPDATE_MEMORY_STRUCT_TOOL_GRAPH,
+            NOOP_STRUCT_TOOL, ADD_MEMORY_STRUCT_TOOL_GRAPH,
+        )
+        for tool in [
+            EXTRACT_ENTITIES_STRUCT_TOOL, RELATIONS_STRUCT_TOOL,
+            DELETE_MEMORY_STRUCT_TOOL_GRAPH, UPDATE_MEMORY_STRUCT_TOOL_GRAPH,
+            NOOP_STRUCT_TOOL, ADD_MEMORY_STRUCT_TOOL_GRAPH,
+        ]:
+            assert tool["function"].get("strict") is True, (
+                f"Struct tool {tool['function']['name']} missing strict: True"
+            )
+
+    def test_all_tools_have_additional_properties_false(self):
+        """All tool parameter objects must have additionalProperties: false."""
+        from mem0.graphs.tools import (
+            EXTRACT_ENTITIES_TOOL, EXTRACT_ENTITIES_STRUCT_TOOL,
+            RELATIONS_TOOL, RELATIONS_STRUCT_TOOL,
+            DELETE_MEMORY_TOOL_GRAPH, DELETE_MEMORY_STRUCT_TOOL_GRAPH,
+            UPDATE_MEMORY_TOOL_GRAPH, UPDATE_MEMORY_STRUCT_TOOL_GRAPH,
+            NOOP_TOOL, NOOP_STRUCT_TOOL,
+            ADD_MEMORY_TOOL_GRAPH, ADD_MEMORY_STRUCT_TOOL_GRAPH,
+        )
+        all_tools = [
+            EXTRACT_ENTITIES_TOOL, EXTRACT_ENTITIES_STRUCT_TOOL,
+            RELATIONS_TOOL, RELATIONS_STRUCT_TOOL,
+            DELETE_MEMORY_TOOL_GRAPH, DELETE_MEMORY_STRUCT_TOOL_GRAPH,
+            UPDATE_MEMORY_TOOL_GRAPH, UPDATE_MEMORY_STRUCT_TOOL_GRAPH,
+            NOOP_TOOL, NOOP_STRUCT_TOOL,
+            ADD_MEMORY_TOOL_GRAPH, ADD_MEMORY_STRUCT_TOOL_GRAPH,
+        ]
+        for tool in all_tools:
+            params = tool["function"]["parameters"]
+            assert params.get("additionalProperties") is False, (
+                f"Tool {tool['function']['name']} top-level params missing additionalProperties: false"
+            )
+
+    def test_struct_entity_extraction_fields(self):
+        """Struct entity extraction must have properties_json field."""
+        from mem0.graphs.tools import EXTRACT_ENTITIES_STRUCT_TOOL
+        items_props = EXTRACT_ENTITIES_STRUCT_TOOL["function"]["parameters"]["properties"]["entities"]["items"]["properties"]
+        assert "properties_json" in items_props
+        assert items_props["properties_json"]["type"] == "string"
+
+    def test_struct_relations_fields(self):
+        """Struct relations must have properties_json field."""
+        from mem0.graphs.tools import RELATIONS_STRUCT_TOOL
+        items_props = RELATIONS_STRUCT_TOOL["function"]["parameters"]["properties"]["entities"]["items"]["properties"]
+        assert "properties_json" in items_props
+        assert items_props["properties_json"]["type"] == "string"
