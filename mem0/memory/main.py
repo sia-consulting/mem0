@@ -1560,6 +1560,55 @@ class Memory(MemoryBase):
         return self.graph.update_edge_properties(source, destination, relationship,
                                                  filters, properties)
 
+    # ------------------------------------------------------------------
+    # Phase 5 — Document Nodes with Vector Store Bridge
+    # ------------------------------------------------------------------
+
+    @traced("graph_add_document")
+    def graph_add_document(self, content, *, user_id=None, agent_id=None, run_id=None,
+                           title=None, source_url=None, source_node=None,
+                           relationship=None, properties=None,
+                           chunk_size=1000, overlap=200):
+        """Add a document to the graph with vectorised content.
+
+        The document text is chunked, embedded, and stored in the vector store.
+        A ``document``-type node is created in the graph with a reference
+        (``vector_tag``) back to those chunks.
+
+        Returns:
+            dict: Created document node info, or empty dict if graph not enabled.
+        """
+        if not self.enable_graph:
+            return {}
+        _, filters = _build_filters_and_metadata(user_id=user_id, agent_id=agent_id, run_id=run_id)
+        return self.graph.add_document(
+            content, filters,
+            title=title, source_url=source_url,
+            source_node=source_node, relationship=relationship,
+            properties=properties,
+            vector_store=self.vector_store,
+            embedding_model=self.embedding_model,
+            chunk_size=chunk_size, overlap=overlap,
+        )
+
+    @traced("graph_load_document")
+    def graph_load_document(self, node_name, *, user_id=None, agent_id=None, run_id=None,
+                            query=None, limit=5):
+        """Load content from a Document node's linked vector store.
+
+        Returns:
+            list[dict]: Chunk dicts, or empty list if graph not enabled.
+        """
+        if not self.enable_graph:
+            return []
+        _, filters = _build_filters_and_metadata(user_id=user_id, agent_id=agent_id, run_id=run_id)
+        return self.graph.load_document(
+            node_name, filters,
+            query=query, limit=limit,
+            vector_store=self.vector_store,
+            embedding_model=self.embedding_model,
+        )
+
     @traced("reset")
     def reset(self):
         """
@@ -2899,6 +2948,51 @@ class AsyncMemory(MemoryBase):
         return await asyncio.to_thread(
             self.graph.update_edge_properties, source, destination, relationship,
             filters, properties,
+        )
+
+    # ------------------------------------------------------------------
+    # Phase 5 — Document Nodes with Vector Store Bridge (async)
+    # ------------------------------------------------------------------
+
+    @async_traced("graph_add_document")
+    async def graph_add_document(self, content, *, user_id=None, agent_id=None, run_id=None,
+                                 title=None, source_url=None, source_node=None,
+                                 relationship=None, properties=None,
+                                 chunk_size=1000, overlap=200):
+        """Add a document to the graph with vectorised content (async).
+
+        Returns:
+            dict: Created document node info, or empty dict if graph not enabled.
+        """
+        if not self.enable_graph:
+            return {}
+        _, filters = _build_filters_and_metadata(user_id=user_id, agent_id=agent_id, run_id=run_id)
+        return await asyncio.to_thread(
+            self.graph.add_document, content, filters,
+            title=title, source_url=source_url,
+            source_node=source_node, relationship=relationship,
+            properties=properties,
+            vector_store=self.vector_store,
+            embedding_model=self.embedding_model,
+            chunk_size=chunk_size, overlap=overlap,
+        )
+
+    @async_traced("graph_load_document")
+    async def graph_load_document(self, node_name, *, user_id=None, agent_id=None, run_id=None,
+                                  query=None, limit=5):
+        """Load content from a Document node's linked vector store (async).
+
+        Returns:
+            list[dict]: Chunk dicts, or empty list if graph not enabled.
+        """
+        if not self.enable_graph:
+            return []
+        _, filters = _build_filters_and_metadata(user_id=user_id, agent_id=agent_id, run_id=run_id)
+        return await asyncio.to_thread(
+            self.graph.load_document, node_name, filters,
+            query=query, limit=limit,
+            vector_store=self.vector_store,
+            embedding_model=self.embedding_model,
         )
 
     @async_traced("reset")

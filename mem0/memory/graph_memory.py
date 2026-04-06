@@ -1727,6 +1727,217 @@ class MemoryGraph:
             "edge_properties": edge_props,
         }
 
+    # ------------------------------------------------------------------
+    # Phase 5 — Document Nodes with Vector Store Bridge
+    # ------------------------------------------------------------------
+
+    def add_document(self, content, filters, *, title=None, source_url=None,
+                     source_node=None, relationship=None, properties=None,
+                     vector_store=None, embedding_model=None,
+                     chunk_size=1000, overlap=200):
+        """Add a document node to the graph with vectorised content.
+
+        Flow:
+            1. Generate a document tag derived from *title* or content hash.
+            2. Chunk the content.
+            3. Summarize the content using the LLM.
+            4. Vectorise and store each chunk in the vector store with the
+               tag as metadata.
+            5. Create a ``document``-type node in the graph with a reference
+               to the vector store tag.
+            6. Connect the node to *source_node* (or the "Me" anchor).
+
+        Args:
+            content (str): The full document text.
+            filters (dict): Scope filters (user_id, agent_id, run_id).
+            title (str | None): Human-readable title; used to derive the
+                document tag.  Falls back to a hash of *content*.
+            source_url (str | None): Where the document came from.
+            source_node (str | None): Node to connect the document to.
+            relationship (str | None): Relationship type from *source_node*.
+            properties (dict | None): Additional flat key-value properties.
+            vector_store: The vector store instance to write chunks to.
+            embedding_model: Embedding model for vectorising chunks.
+            chunk_size (int): Characters per chunk (default 1000).
+            overlap (int): Overlap between chunks (default 200).
+
+        Returns:
+            dict: Created document node info including ``vector_tag`` and
+            ``chunk_count``.
+
+        Raises:
+            ValueError: If *content* is empty or *vector_store* / *embedding_model*
+                are not provided.
+        """
+        if not content or not isinstance(content, str):
+            raise ValueError("content must be a non-empty string")
+        if vector_store is None:
+            raise ValueError("vector_store is required for document storage")
+        if embedding_model is None:
+            raise ValueError("embedding_model is required for document storage")
+
+        from mem0.memory.utils import chunk_text
+        import hashlib
+        import uuid
+        from datetime import datetime, timezone
+
+        # ---- 1. Document tag ----
+        doc_slug = (title or "").lower().replace(" ", "_")[:80]
+        if not doc_slug:
+            doc_slug = hashlib.md5(content[:500].encode()).hexdigest()[:12]
+        doc_tag = f"doc:{doc_slug}"
+
+        # ---- 2. Chunk ----
+        chunks = chunk_text(content, chunk_size=chunk_size, overlap=overlap)
+        if not chunks:
+            raise ValueError("Content produced no chunks")
+
+        # ---- 3. Summarize ----
+        summary_prompt = (
+            "Summarize the following document in 1-2 concise sentences:\n\n"
+            + content[:4000]
+        )
+        try:
+            summary = self.llm.generate_response(
+                messages=[{"role": "user", "content": summary_prompt}]
+            )
+        except Exception:
+            summary = (content[:200] + "...") if len(content) > 200 else content
+
+        # ---- 4. Vectorise & store chunks ----
+        chunk_ids = []
+        for idx, chunk in enumerate(chunks):
+            chunk_id = str(uuid.uuid4())
+            chunk_ids.append(chunk_id)
+            embedding = embedding_model.embed(chunk)
+            metadata = {
+                "data": chunk,
+                "document_tag": doc_tag,
+                "document_title": title or doc_slug,
+                "chunk_index": idx,
+                "is_document_chunk": True,
+                "user_id": filters["user_id"],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if filters.get("agent_id"):
+                metadata["agent_id"] = filters["agent_id"]
+            if filters.get("run_id"):
+                metadata["run_id"] = filters["run_id"]
+
+            vector_store.insert(
+                vectors=[embedding],
+                ids=[chunk_id],
+                payloads=[metadata],
+            )
+
+        # ---- 5 & 6. Graph node via add_node ----
+        doc_name = doc_slug
+        doc_props = _sanitize_properties(properties or {})
+        # Merge in document-specific properties (these won't collide with
+        # _SYSTEM_RESERVED_KEYS since they are domain-specific).
+        doc_props["title"] = title or doc_slug
+        doc_props["vector_tag"] = doc_tag
+        doc_props["chunk_count"] = str(len(chunks))
+        doc_props["content_summary"] = str(summary)[:500]
+        if source_url:
+            doc_props["source_url"] = str(source_url)
+
+        node_result = self.add_node(
+            doc_name,
+            filters,
+            entity_type="document",
+            properties=doc_props,
+            source_node=source_node,
+            relationship=relationship,
+        )
+
+        node_result["vector_tag"] = doc_tag
+        node_result["chunk_count"] = len(chunks)
+        return node_result
+
+    def load_document(self, node_name, filters, *, query=None, limit=5,
+                      vector_store=None, embedding_model=None):
+        """Load content from a Document node's linked vector store.
+
+        If *query* is provided a semantic search is performed within the
+        document's chunks; otherwise the first *limit* chunks are returned
+        in chunk-index order.
+
+        Args:
+            node_name (str): Name of the Document node.
+            filters (dict): Scope filters.
+            query (str | None): Optional semantic search query.
+            limit (int): Max chunks to return (default 5).
+            vector_store: The vector store instance.
+            embedding_model: Embedding model for vectorising *query*.
+
+        Returns:
+            list[dict]: Chunk dicts with ``chunk_index``, ``text``, and
+            ``score`` (when *query* is given).
+
+        Raises:
+            ValueError: If the node is not found, is not a document node, or
+                required dependencies are missing.
+        """
+        if not node_name or not isinstance(node_name, str):
+            raise ValueError("node_name must be a non-empty string")
+        if vector_store is None:
+            raise ValueError("vector_store is required")
+        if embedding_model is None:
+            raise ValueError("embedding_model is required")
+
+        node_name = node_name.lower().replace(" ", "_")
+
+        # Fetch the graph node to get the vector_tag
+        node = self.get_node(node_name, filters)
+        if node is None:
+            raise ValueError(f"Node '{node_name}' not found")
+
+        props = node.get("properties") or {}
+        vector_tag = props.get("vector_tag")
+        if not vector_tag:
+            raise ValueError(f"Node '{node_name}' is not a document node (no vector_tag)")
+
+        # Build metadata filter for the vector store
+        vs_filters = {
+            "document_tag": vector_tag,
+            "user_id": filters["user_id"],
+        }
+        if filters.get("agent_id"):
+            vs_filters["agent_id"] = filters["agent_id"]
+        if filters.get("run_id"):
+            vs_filters["run_id"] = filters["run_id"]
+
+        if query:
+            # Semantic search within the document's chunks
+            query_embedding = embedding_model.embed(query)
+            results = vector_store.search(
+                query=query,
+                vectors=query_embedding,
+                limit=limit,
+                filters=vs_filters,
+            )
+            return [
+                {
+                    "chunk_index": (r.get("payload") or {}).get("chunk_index", -1),
+                    "text": (r.get("payload") or {}).get("data", ""),
+                    "score": r.get("score", 0.0),
+                }
+                for r in results
+            ]
+        else:
+            # Retrieve first N chunks by listing
+            results = vector_store.list(filters=vs_filters, limit=limit)
+            entries = []
+            for r in results:
+                payload = r[1] if isinstance(r, (list, tuple)) and len(r) > 1 else (r.get("payload") or r)
+                entries.append({
+                    "chunk_index": payload.get("chunk_index", -1),
+                    "text": payload.get("data", ""),
+                })
+            entries.sort(key=lambda e: e["chunk_index"])
+            return entries[:limit]
+
     def _remove_spaces_from_entities(self, entity_list):
         return remove_spaces_from_entities(entity_list, sanitize_relationship=True)
 

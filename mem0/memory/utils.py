@@ -295,3 +295,44 @@ def remove_spaces_from_entities(
         cleaned.append(item)
     return cleaned
 
+
+def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> List[str]:
+    """Split *text* into overlapping chunks of approximately *chunk_size* characters.
+
+    The function tries to break on whitespace boundaries so that words are not
+    cut in the middle.  Chunks overlap by *overlap* characters to preserve
+    context across boundaries.
+
+    Args:
+        text: The document text to chunk.
+        chunk_size: Target number of characters per chunk (default 1000).
+        overlap: Number of characters to overlap between successive chunks
+            (default 200).  Must be less than *chunk_size*.
+
+    Returns:
+        List of text chunks.  An empty string yields an empty list.
+    """
+    if not text:
+        return []
+    if overlap >= chunk_size:
+        raise ValueError("overlap must be less than chunk_size")
+
+    chunks: List[str] = []
+    start = 0
+    text_len = len(text)
+    while start < text_len:
+        end = start + chunk_size
+        if end >= text_len:
+            chunks.append(text[start:].strip())
+            break
+        # Try to break on whitespace near the end of the chunk
+        break_at = text.rfind(" ", start + chunk_size // 2, end + 1)
+        if break_at == -1:
+            break_at = end
+        chunks.append(text[start:break_at].strip())
+        start = break_at - overlap if break_at > overlap else break_at
+        # Avoid infinite loop on tiny overlap
+        if start <= (break_at - chunk_size):
+            start = break_at
+    return [c for c in chunks if c]
+
