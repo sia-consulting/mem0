@@ -1298,7 +1298,7 @@ class MemoryGraph:
 
         hops = []
         for i, rel in enumerate(rels):
-            rel_props = dict(rel) if hasattr(rel, '__iter__') and not isinstance(rel, str) else {}
+            rel_props = dict(rel) if isinstance(rel, dict) else (dict(rel) if hasattr(rel, 'items') else {})
             src_node = path_nodes[i] if i < len(path_nodes) else {}
             dst_node = path_nodes[i + 1] if (i + 1) < len(path_nodes) else {}
 

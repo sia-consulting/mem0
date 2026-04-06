@@ -2721,7 +2721,7 @@ class AsyncMemory(MemoryBase):
         _, filters = _build_filters_and_metadata(user_id=user_id, agent_id=agent_id, run_id=run_id)
         return await asyncio.to_thread(
             self.graph.get_neighbors, node_name, filters,
-            direction, relationship_type, limit,
+            direction=direction, relationship_type=relationship_type, limit=limit,
         )
 
     @async_traced("graph_walk")
@@ -2737,7 +2737,7 @@ class AsyncMemory(MemoryBase):
         _, filters = _build_filters_and_metadata(user_id=user_id, agent_id=agent_id, run_id=run_id)
         return await asyncio.to_thread(
             self.graph.walk, start_node, filters,
-            depth, relationship_type, limit,
+            depth=depth, relationship_type=relationship_type, limit=limit,
         )
 
     @async_traced("graph_find_path")
@@ -2751,7 +2751,7 @@ class AsyncMemory(MemoryBase):
         if not self.enable_graph:
             return None
         _, filters = _build_filters_and_metadata(user_id=user_id, agent_id=agent_id, run_id=run_id)
-        return await asyncio.to_thread(self.graph.find_path, from_node, to_node, filters, max_depth)
+        return await asyncio.to_thread(self.graph.find_path, from_node, to_node, filters, max_depth=max_depth)
 
     @async_traced("graph_get_edges")
     async def graph_get_edges(self, node_name, *, user_id=None, agent_id=None, run_id=None,
@@ -2767,7 +2767,8 @@ class AsyncMemory(MemoryBase):
         _, filters = _build_filters_and_metadata(user_id=user_id, agent_id=agent_id, run_id=run_id)
         return await asyncio.to_thread(
             self.graph.get_edges, node_name, filters,
-            direction, relationship_type, include_invalid, limit,
+            direction=direction, relationship_type=relationship_type,
+            include_invalid=include_invalid, limit=limit,
         )
 
     @async_traced("reset")
