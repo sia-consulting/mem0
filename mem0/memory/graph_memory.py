@@ -26,6 +26,14 @@ from mem0.utils.factory import EmbedderFactory, LlmFactory
 
 logger = logging.getLogger(__name__)
 
+# Keys reserved for internal graph management — filtered from user-facing property results
+# and protected from overwrites in _sanitize_properties().
+_SYSTEM_RESERVED_KEYS = frozenset({
+    "name", "user_id", "agent_id", "run_id", "embedding", "mentions",
+    "created", "source", "valid", "created_at", "updated_at",
+    "invalidated_at", "relationship",
+})
+
 
 def _parse_entity_properties(item):
     """Parse properties from an entity extraction result.
@@ -70,18 +78,21 @@ def _parse_relation_properties(item):
 def _sanitize_properties(props):
     """Sanitize a properties dict for safe storage in Neo4j.
 
-    Ensures all keys are valid identifiers and values are flat strings.
-    Filters out internal/reserved keys.
+    Ensures all keys are valid Python identifiers and values are flat strings.
+    Filters out internal/reserved keys (see ``_SYSTEM_RESERVED_KEYS``).
+
+    All values are coerced to strings because Neo4j property maps passed
+    via ``SET n += $props`` must have homogeneous types within the map,
+    and string is the safest common denominator for arbitrary LLM-extracted
+    data.  Callers should be aware that numeric or boolean values will be
+    stored as their string representations.
     """
     if not props:
         return {}
-    reserved = {"name", "user_id", "agent_id", "run_id", "embedding", "mentions",
-                "created", "source", "valid", "created_at", "updated_at",
-                "invalidated_at", "relationship"}
     sanitized = {}
     for k, v in props.items():
         key = k.lower().replace(" ", "_").replace("-", "_")
-        if key in reserved:
+        if key in _SYSTEM_RESERVED_KEYS:
             continue
         if not key.isidentifier():
             continue
@@ -175,11 +186,6 @@ class MemoryGraph:
         if not search_output:
             return []
 
-        # Internal/system keys to exclude from user-facing properties
-        _system_keys = {"name", "user_id", "agent_id", "run_id", "embedding",
-                        "mentions", "created", "source", "valid", "created_at",
-                        "updated_at", "invalidated_at", "relationship"}
-
         search_outputs_sequence = [
             [item["source"], item["relationship"], item["destination"]] for item in search_output
         ]
@@ -201,9 +207,9 @@ class MemoryGraph:
             # Attach filtered properties if available
             original = props_lookup.get((item[0], item[1], item[2]))
             if original:
-                src_props = {k: v for k, v in (original.get("source_properties") or {}).items() if k not in _system_keys}
-                edge_props = {k: v for k, v in (original.get("edge_properties") or {}).items() if k not in _system_keys}
-                dest_props = {k: v for k, v in (original.get("destination_properties") or {}).items() if k not in _system_keys}
+                src_props = {k: v for k, v in (original.get("source_properties") or {}).items() if k not in _SYSTEM_RESERVED_KEYS}
+                edge_props = {k: v for k, v in (original.get("edge_properties") or {}).items() if k not in _SYSTEM_RESERVED_KEYS}
+                dest_props = {k: v for k, v in (original.get("destination_properties") or {}).items() if k not in _SYSTEM_RESERVED_KEYS}
                 if src_props:
                     entry["source_properties"] = src_props
                 if edge_props:
@@ -290,11 +296,6 @@ class MemoryGraph:
         """
         results = self.graph.query(query, params=params)
 
-        # Internal/system keys to exclude from user-facing properties
-        _system_keys = {"name", "user_id", "agent_id", "run_id", "embedding",
-                        "mentions", "created", "source", "valid", "created_at",
-                        "updated_at", "invalidated_at", "relationship"}
-
         final_results = []
         for result in results:
             entry = {
@@ -303,9 +304,9 @@ class MemoryGraph:
                 "target": result["target"],
             }
             # Include custom properties, filtering out system keys
-            src_props = {k: v for k, v in (result.get("source_properties") or {}).items() if k not in _system_keys}
-            edge_props = {k: v for k, v in (result.get("edge_properties") or {}).items() if k not in _system_keys}
-            tgt_props = {k: v for k, v in (result.get("target_properties") or {}).items() if k not in _system_keys}
+            src_props = {k: v for k, v in (result.get("source_properties") or {}).items() if k not in _SYSTEM_RESERVED_KEYS}
+            edge_props = {k: v for k, v in (result.get("edge_properties") or {}).items() if k not in _SYSTEM_RESERVED_KEYS}
+            tgt_props = {k: v for k, v in (result.get("target_properties") or {}).items() if k not in _SYSTEM_RESERVED_KEYS}
             if src_props:
                 entry["source_properties"] = src_props
             if edge_props:
@@ -808,7 +809,7 @@ class MemoryGraph:
                 SET destination += $dest_node_props
                 WITH source, destination
                 CALL db.create.setNodeVectorProperty(destination, 'embedding', $dest_embedding)
-                With source, destination
+                WITH source, destination
                 MERGE (source)-[r:{relationship}]->(destination)
                 ON CREATE SET
                     r.created_at = timestamp(),
