@@ -118,6 +118,11 @@ class GraphStoreConfig(BaseModel):
         ge=0.0,
         le=1.0,
     )
+    anchor_node_name: str = Field(
+        description="Name of the anchor ('Me') root node created per user/agent scope. "
+                    "All orphan nodes are connected to this node to keep the graph navigable.",
+        default="me",
+    )
 
     @field_validator("config")
     def validate_config(cls, v, values):

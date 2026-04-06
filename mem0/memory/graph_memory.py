@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 _SYSTEM_RESERVED_KEYS = frozenset({
     "name", "user_id", "agent_id", "run_id", "embedding", "mentions",
     "created", "source", "valid", "created_at", "updated_at",
-    "invalidated_at", "relationship",
+    "invalidated_at", "relationship", "is_anchor", "entity_type",
 })
 
 
@@ -146,6 +146,8 @@ class MemoryGraph:
         self.user_id = None
         # Use threshold from graph_store config, default to 0.7 for backward compatibility
         self.threshold = self.config.graph_store.threshold if hasattr(self.config.graph_store, 'threshold') else 0.7
+        # Anchor node name per agent/user scope (Phase 2)
+        self.anchor_node_name = getattr(self.config.graph_store, 'anchor_node_name', 'me')
 
     def add(self, data, filters):
         """
@@ -155,6 +157,9 @@ class MemoryGraph:
             data (str): The data to add to the graph.
             filters (dict): A dictionary containing filters to be applied during the addition.
         """
+        # Ensure the anchor "Me" node exists before processing entities (Phase 2)
+        self._ensure_me_node(filters)
+
         entity_type_map = self._retrieve_nodes_from_data(data, filters)
         to_be_added = self._establish_nodes_relations_from_data(data, filters, entity_type_map)
         search_output = self._search_graph_db(node_list=list(entity_type_map.keys()), filters=filters)
@@ -164,6 +169,9 @@ class MemoryGraph:
         # TODO: Add more filter support
         deleted_entities = self._delete_entities(to_be_deleted, filters)
         added_entities = self._add_entities(to_be_added, filters, entity_type_map)
+
+        # Connect any orphan nodes to the anchor "Me" node (Phase 2)
+        self._connect_orphans_to_me(to_be_added, filters)
 
         return {"deleted_entities": deleted_entities, "added_entities": added_entities}
 
@@ -843,6 +851,203 @@ class MemoryGraph:
             result = self.graph.query(cypher, params=params)
             results.append(result)
         return results
+
+    # ------------------------------------------------------------------
+    # Phase 2 — "Me" anchor node helpers
+    # ------------------------------------------------------------------
+
+    def _ensure_me_node(self, filters):
+        """Create the anchor "Me" node for the current scope if it doesn't exist.
+
+        Uses MERGE so the node is created only once per (user_id[, agent_id[, run_id]]).
+        The node is tagged with ``is_anchor = true`` and ``entity_type = "self"``.
+        """
+        anchor_name = self.anchor_node_name
+
+        merge_props = ["name: $anchor_name", "user_id: $user_id"]
+        params = {"anchor_name": anchor_name, "user_id": filters["user_id"]}
+        if filters.get("agent_id"):
+            merge_props.append("agent_id: $agent_id")
+            params["agent_id"] = filters["agent_id"]
+        if filters.get("run_id"):
+            merge_props.append("run_id: $run_id")
+            params["run_id"] = filters["run_id"]
+        merge_props_str = ", ".join(merge_props)
+
+        # Embed the anchor name so vector-similarity searches can find it
+        anchor_embedding = self.embedding_model.embed(anchor_name)
+        params["anchor_embedding"] = anchor_embedding
+
+        cypher = f"""
+        MERGE (me {self.node_label} {{{merge_props_str}}})
+        ON CREATE SET
+            me.created = timestamp(),
+            me.created_at = timestamp(),
+            me.updated_at = timestamp(),
+            me.entity_type = 'self',
+            me.is_anchor = true,
+            me.mentions = 1
+        ON MATCH SET
+            me.mentions = coalesce(me.mentions, 0) + 1,
+            me.updated_at = timestamp()
+        WITH me
+        CALL db.create.setNodeVectorProperty(me, 'embedding', $anchor_embedding)
+        RETURN me.name AS name
+        """
+        self.graph.query(cypher, params=params)
+
+    def _connect_orphans_to_me(self, to_be_added, filters):
+        """Connect newly-added nodes that have no other connections to the anchor "Me" node.
+
+        An "orphan" is a node whose *only* valid relationships (if any) are to/from
+        the "Me" node itself.  For each unique node name in ``to_be_added`` that is
+        not already connected to another non-anchor node, a ``KNOWS_ABOUT``
+        relationship is created from "Me" → orphan.
+        """
+        if not to_be_added:
+            return
+
+        anchor_name = self.anchor_node_name
+
+        # Collect every node name from the entities that were just added
+        node_names = set()
+        for item in to_be_added:
+            src = item.get("source", "").lower().replace(" ", "_")
+            dst = item.get("destination", "").lower().replace(" ", "_")
+            if src:
+                node_names.add(src)
+            if dst:
+                node_names.add(dst)
+
+        # Never try to connect the anchor to itself
+        node_names.discard(anchor_name)
+        if not node_names:
+            return
+
+        # Build scope filter
+        node_filter_parts = ["n.user_id = $user_id"]
+        params = {
+            "user_id": filters["user_id"],
+            "anchor_name": anchor_name,
+            "node_names": list(node_names),
+        }
+        if filters.get("agent_id"):
+            node_filter_parts.append("n.agent_id = $agent_id")
+            params["agent_id"] = filters["agent_id"]
+        if filters.get("run_id"):
+            node_filter_parts.append("n.run_id = $run_id")
+            params["run_id"] = filters["run_id"]
+        node_filter_str = " AND ".join(node_filter_parts)
+
+        # Build anchor scope filter (same scope conditions but for the "me" node)
+        me_filter_parts = ["me.user_id = $user_id"]
+        if filters.get("agent_id"):
+            me_filter_parts.append("me.agent_id = $agent_id")
+        if filters.get("run_id"):
+            me_filter_parts.append("me.run_id = $run_id")
+        me_filter_str = " AND ".join(me_filter_parts)
+
+        # Find orphan nodes: nodes that have no valid relationship to any
+        # non-anchor node.  Then connect them to "Me" with KNOWS_ABOUT.
+        cypher = f"""
+        MATCH (n {self.node_label})
+        WHERE {node_filter_str} AND n.name IN $node_names AND n.is_anchor IS NULL
+        WITH n
+        OPTIONAL MATCH (n)-[r]-(other {self.node_label})
+        WHERE other.is_anchor IS NULL AND (r.valid IS NULL OR r.valid = true)
+        WITH n, count(other) AS connections
+        WHERE connections = 0
+        WITH collect(n) AS orphans
+        MATCH (me {self.node_label})
+        WHERE me.name = $anchor_name AND {me_filter_str}
+        UNWIND orphans AS orphan
+        MERGE (me)-[r:KNOWS_ABOUT]->(orphan)
+        ON CREATE SET
+            r.created_at = timestamp(),
+            r.updated_at = timestamp(),
+            r.mentions = 1,
+            r.valid = true
+        ON MATCH SET
+            r.mentions = coalesce(r.mentions, 0) + 1,
+            r.valid = true,
+            r.updated_at = timestamp(),
+            r.invalidated_at = null
+        RETURN orphan.name AS orphan_name
+        """
+
+        result = self.graph.query(cypher, params=params)
+        if result:
+            orphan_names = [r["orphan_name"] for r in result]
+            logger.debug(f"Connected orphan nodes to '{anchor_name}': {orphan_names}")
+
+    def get_me_node(self, filters, depth=1):
+        """Return the anchor "Me" node and its connections up to ``depth`` hops.
+
+        Args:
+            filters (dict): Scope filters (user_id, agent_id, run_id).
+            depth (int): How many hops out from the "Me" node to traverse.
+                         Defaults to 1 (direct connections only).
+
+        Returns:
+            dict: ``{"me": {...}, "connections": [...]}``.  Each connection
+            contains ``source``, ``relationship``, ``destination`` and optional
+            ``edge_properties``, ``destination_properties`` dicts.
+            Returns ``None`` if no "Me" node exists for the scope.
+        """
+        anchor_name = self.anchor_node_name
+
+        # Build match conditions for the anchor node
+        me_props = ["name: $anchor_name", "user_id: $user_id"]
+        params = {"anchor_name": anchor_name, "user_id": filters["user_id"], "depth": depth}
+        if filters.get("agent_id"):
+            me_props.append("agent_id: $agent_id")
+            params["agent_id"] = filters["agent_id"]
+        if filters.get("run_id"):
+            me_props.append("run_id: $run_id")
+            params["run_id"] = filters["run_id"]
+        me_props_str = ", ".join(me_props)
+
+        # Variable-length path: 1..depth hops
+        cypher = f"""
+        MATCH (me {self.node_label} {{{me_props_str}}})
+        OPTIONAL MATCH (me)-[r*1..$depth]->(neighbor {self.node_label})
+        WHERE ALL(rel IN r WHERE rel.valid IS NULL OR rel.valid = true)
+        WITH me, r, neighbor
+        RETURN me {{.name, .entity_type, .is_anchor, .created}} AS me_node,
+               CASE WHEN neighbor IS NOT NULL THEN {{
+                   source: me.name,
+                   relationship: type(last(r)),
+                   destination: neighbor.name,
+                   edge_properties: properties(last(r)),
+                   destination_properties: properties(neighbor)
+               }} ELSE null END AS connection
+        """
+
+        results = self.graph.query(cypher, params=params)
+
+        if not results:
+            return None
+
+        me_data = results[0].get("me_node")
+        connections = []
+        for row in results:
+            conn = row.get("connection")
+            if conn is not None:
+                # Filter system keys from properties
+                edge_props = {k: v for k, v in (conn.get("edge_properties") or {}).items() if k not in _SYSTEM_RESERVED_KEYS}
+                dest_props = {k: v for k, v in (conn.get("destination_properties") or {}).items() if k not in _SYSTEM_RESERVED_KEYS}
+                entry = {
+                    "source": conn["source"],
+                    "relationship": conn["relationship"],
+                    "destination": conn["destination"],
+                }
+                if edge_props:
+                    entry["edge_properties"] = edge_props
+                if dest_props:
+                    entry["destination_properties"] = dest_props
+                connections.append(entry)
+
+        return {"me": dict(me_data) if me_data else {}, "connections": connections}
 
     def _remove_spaces_from_entities(self, entity_list):
         return remove_spaces_from_entities(entity_list, sanitize_relationship=True)

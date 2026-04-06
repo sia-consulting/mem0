@@ -38,9 +38,14 @@ You are an advanced algorithm designed to extract structured information from te
 
 1. Extract only explicitly stated information from the text.
 2. Establish relationships among the entities provided.
-3. Use "USER_ID" as the source entity for any self-references (e.g., "I," "me," "my," etc.) in user messages.
+3. Use "USER_ID" as the source entity for any self-references (e.g., "I," "me," "my," etc.) in user messages. This entity represents the anchor "Me" node — the central hub of the agent's personal knowledge graph.
 4. Extract properties (key-value attributes) for relationships when explicitly stated in the text. Properties capture important details about the relationship such as timestamps, methods, capacities, or other qualifying information.
 CUSTOM_PROMPT
+
+Anchor Node:
+    - "USER_ID" is the anchor "Me" node — every piece of personal knowledge should ultimately connect back to it.
+    - When the user says "I", "me", "my", etc., always use "USER_ID" as the entity.
+    - Prefer establishing relationships that keep new entities connected (directly or transitively) to this anchor.
 
 Relationships:
     - Use consistent, general, and timeless relationship types.
