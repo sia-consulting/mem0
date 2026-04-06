@@ -1393,6 +1393,340 @@ class MemoryGraph:
 
         return edges
 
+    # ------------------------------------------------------------------
+    # Phase 4 — Direct node/edge creation API
+    # ------------------------------------------------------------------
+
+    def add_node(self, name, filters, entity_type=None, properties=None,
+                 source_node=None, relationship=None):
+        """Directly add a node to the graph without LLM extraction.
+
+        The node is always connected to the graph.  If ``source_node`` and
+        ``relationship`` are given, an edge is created from *source_node* to
+        the new node.  Otherwise the new node is connected to the "Me" anchor
+        node via a ``KNOWS_ABOUT`` edge (the anchor is lazily created if it
+        does not yet exist).
+
+        Args:
+            name (str): Node name (will be lowercased / underscored).
+            filters (dict): Scope filters (user_id, agent_id, run_id).
+            entity_type (str | None): Optional type label.
+            properties (dict | None): Flat key-value properties.
+            source_node (str | None): Existing node to connect FROM.
+            relationship (str | None): Relationship type for the edge
+                (required when *source_node* is given).
+
+        Returns:
+            dict: Created/updated node info.
+
+        Raises:
+            ValueError: If *name* is empty, if *source_node* is given without
+                *relationship*, or if the *source_node* does not exist.
+        """
+        if not name or not isinstance(name, str):
+            raise ValueError("Node name must be a non-empty string")
+
+        name = name.lower().replace(" ", "_")
+
+        if source_node and not relationship:
+            raise ValueError("relationship is required when source_node is given")
+
+        # Sanitize
+        safe_props = _sanitize_properties(properties or {})
+        safe_entity_type = entity_type.lower().replace(" ", "_") if entity_type else None
+
+        # Resolve connection target
+        if source_node:
+            source_node = source_node.lower().replace(" ", "_")
+            from mem0.memory.utils import sanitize_relationship_for_cypher
+            safe_rel = sanitize_relationship_for_cypher(relationship.lower().replace(" ", "_"))
+            # Verify source_node exists
+            existing = self.get_node(source_node, filters)
+            if existing is None:
+                raise ValueError(f"Source node '{source_node}' does not exist in the graph")
+        else:
+            # Default: connect to anchor "Me" node
+            self._ensure_me_node(filters)
+            source_node = self.anchor_node_name
+            safe_rel = "KNOWS_ABOUT"
+
+        # Build MERGE props for the new node — use $new_node_name to avoid
+        # collision with _build_scope_filter's $node_name.
+        merge_parts = ["name: $new_node_name", "user_id: $user_id"]
+        params = {"new_node_name": name, "user_id": filters["user_id"]}
+        if filters.get("agent_id"):
+            merge_parts.append("agent_id: $agent_id")
+            params["agent_id"] = filters["agent_id"]
+        if filters.get("run_id"):
+            merge_parts.append("run_id: $run_id")
+            params["run_id"] = filters["run_id"]
+        merge_str = ", ".join(merge_parts)
+
+        # Source filter
+        src_where, src_params = self._build_scope_filter("src", filters, include_name=source_node)
+        params.update(src_params)
+
+        # Entity type SET
+        etype_set = ", n.entity_type = $entity_type" if safe_entity_type else ""
+        if safe_entity_type:
+            params["entity_type"] = safe_entity_type
+
+        # Properties
+        props_set = ", n += $node_props" if safe_props else ""
+        params["node_props"] = safe_props
+
+        # Embedding
+        node_embedding = self.embedding_model.embed(name)
+        params["node_embedding"] = node_embedding
+
+        # Edge properties (none for direct add_node)
+        params["edge_props"] = {}
+
+        node_label = self.node_label
+        extra_label_set = f", n:`{safe_entity_type}`" if (not node_label and safe_entity_type) else ""
+
+        cypher = f"""
+        MATCH (src {node_label})
+        WHERE {src_where}
+        MERGE (n {node_label} {{{merge_str}}})
+        ON CREATE SET
+            n.created = timestamp(),
+            n.created_at = timestamp(),
+            n.updated_at = timestamp(),
+            n.mentions = 1
+            {etype_set}
+            {extra_label_set}
+            {props_set}
+        ON MATCH SET
+            n.mentions = coalesce(n.mentions, 0) + 1,
+            n.updated_at = timestamp()
+            {etype_set}
+            {props_set}
+        WITH src, n
+        CALL db.create.setNodeVectorProperty(n, 'embedding', $node_embedding)
+        WITH src, n
+        MERGE (src)-[r:{safe_rel}]->(n)
+        ON CREATE SET
+            r.created_at = timestamp(),
+            r.updated_at = timestamp(),
+            r.mentions = 1,
+            r.valid = true
+        ON MATCH SET
+            r.mentions = coalesce(r.mentions, 0) + 1,
+            r.valid = true,
+            r.updated_at = timestamp(),
+            r.invalidated_at = null
+        RETURN n.name AS name, labels(n) AS labels,
+               src.name AS connected_from, type(r) AS via_relationship
+        """
+
+        results = self.graph.query(cypher, params=params)
+
+        if not results:
+            return {"name": name, "entity_type": safe_entity_type, "properties": safe_props}
+
+        row = results[0]
+        return {
+            "name": row.get("name", name),
+            "entity_type": safe_entity_type,
+            "properties": safe_props,
+            "connected_from": row.get("connected_from"),
+            "via_relationship": row.get("via_relationship"),
+        }
+
+    def add_edge(self, source, destination, relationship, filters, properties=None):
+        """Directly add an edge between two existing nodes.
+
+        Args:
+            source (str): Source node name.
+            destination (str): Destination node name.
+            relationship (str): Relationship type.
+            filters (dict): Scope filters.
+            properties (dict | None): Flat key-value edge properties.
+
+        Returns:
+            dict: Created/updated edge info.
+
+        Raises:
+            ValueError: If either node does not exist in the graph, or if
+                any required argument is empty.
+        """
+        if not source or not isinstance(source, str):
+            raise ValueError("source must be a non-empty string")
+        if not destination or not isinstance(destination, str):
+            raise ValueError("destination must be a non-empty string")
+        if not relationship or not isinstance(relationship, str):
+            raise ValueError("relationship must be a non-empty string")
+
+        source = source.lower().replace(" ", "_")
+        destination = destination.lower().replace(" ", "_")
+        from mem0.memory.utils import sanitize_relationship_for_cypher
+        safe_rel = sanitize_relationship_for_cypher(relationship.lower().replace(" ", "_"))
+        safe_props = _sanitize_properties(properties or {})
+
+        # Verify both nodes exist
+        src_exists = self.get_node(source, filters)
+        if src_exists is None:
+            raise ValueError(f"Source node '{source}' does not exist")
+        dst_exists = self.get_node(destination, filters)
+        if dst_exists is None:
+            raise ValueError(f"Destination node '{destination}' does not exist")
+
+        # Build filters for MATCH
+        src_where, params = self._build_scope_filter("src", filters, include_name=source)
+        dst_where, dst_params = self._build_scope_filter("dst", filters, include_name=destination)
+
+        # Merge params — rename dst params to avoid collision
+        params["dst_node_name"] = destination
+        dst_where = dst_where.replace("$node_name", "$dst_node_name")
+        # agent_id/run_id params are shared, no collision
+
+        edge_props_set = ", r += $edge_props" if safe_props else ""
+        params["edge_props"] = safe_props
+
+        cypher = f"""
+        MATCH (src {self.node_label})
+        WHERE {src_where}
+        MATCH (dst {self.node_label})
+        WHERE {dst_where}
+        MERGE (src)-[r:{safe_rel}]->(dst)
+        ON CREATE SET
+            r.created_at = timestamp(),
+            r.updated_at = timestamp(),
+            r.mentions = 1,
+            r.valid = true
+            {edge_props_set}
+        ON MATCH SET
+            r.mentions = coalesce(r.mentions, 0) + 1,
+            r.valid = true,
+            r.updated_at = timestamp(),
+            r.invalidated_at = null
+            {edge_props_set}
+        RETURN src.name AS source, type(r) AS relationship, dst.name AS destination
+        """
+
+        results = self.graph.query(cypher, params=params)
+
+        if not results:
+            return {"source": source, "relationship": safe_rel, "destination": destination}
+
+        row = results[0]
+        result = {
+            "source": row.get("source", source),
+            "relationship": row.get("relationship", safe_rel),
+            "destination": row.get("destination", destination),
+        }
+        if safe_props:
+            result["edge_properties"] = safe_props
+        return result
+
+    def update_node_properties(self, node_name, filters, properties):
+        """Update properties on an existing node (merge with existing).
+
+        Args:
+            node_name (str): Name of the node to update.
+            filters (dict): Scope filters.
+            properties (dict): Properties to set (merged with existing).
+
+        Returns:
+            dict | None: Updated node info or None if not found.
+
+        Raises:
+            ValueError: If *properties* is empty or not a dict.
+        """
+        if not properties or not isinstance(properties, dict):
+            raise ValueError("properties must be a non-empty dict")
+        if not node_name or not isinstance(node_name, str):
+            raise ValueError("node_name must be a non-empty string")
+
+        node_name = node_name.lower().replace(" ", "_")
+        safe_props = _sanitize_properties(properties)
+        if not safe_props:
+            raise ValueError("No valid properties remain after sanitization")
+
+        where_clause, params = self._build_scope_filter("n", filters, include_name=node_name)
+        params["update_props"] = safe_props
+
+        cypher = f"""
+        MATCH (n {self.node_label})
+        WHERE {where_clause}
+        SET n += $update_props,
+            n.updated_at = timestamp()
+        RETURN n.name AS name, properties(n) AS props
+        """
+
+        results = self.graph.query(cypher, params=params)
+        if not results:
+            return None
+
+        row = results[0]
+        all_props = row.get("props") or {}
+        user_props = {k: v for k, v in all_props.items() if k not in _SYSTEM_RESERVED_KEYS}
+        return {
+            "name": row.get("name", node_name),
+            "properties": user_props,
+        }
+
+    def update_edge_properties(self, source, destination, relationship, filters, properties):
+        """Update properties on an existing edge (merge with existing).
+
+        Args:
+            source (str): Source node name.
+            destination (str): Destination node name.
+            relationship (str): Relationship type.
+            filters (dict): Scope filters.
+            properties (dict): Properties to set (merged with existing).
+
+        Returns:
+            dict | None: Updated edge info or None if edge not found.
+
+        Raises:
+            ValueError: If *properties* is empty or not a dict.
+        """
+        if not properties or not isinstance(properties, dict):
+            raise ValueError("properties must be a non-empty dict")
+
+        source = source.lower().replace(" ", "_") if source else ""
+        destination = destination.lower().replace(" ", "_") if destination else ""
+        if not source or not destination or not relationship:
+            raise ValueError("source, destination, and relationship must be non-empty strings")
+
+        from mem0.memory.utils import sanitize_relationship_for_cypher
+        safe_rel = sanitize_relationship_for_cypher(relationship.lower().replace(" ", "_"))
+        safe_props = _sanitize_properties(properties)
+        if not safe_props:
+            raise ValueError("No valid properties remain after sanitization")
+
+        src_where, params = self._build_scope_filter("src", filters, include_name=source)
+        dst_where, _ = self._build_scope_filter("dst", filters, include_name=destination)
+        params["dst_node_name"] = destination
+        dst_where = dst_where.replace("$node_name", "$dst_node_name")
+        params["update_props"] = safe_props
+
+        cypher = f"""
+        MATCH (src {self.node_label})-[r:{safe_rel}]->(dst {self.node_label})
+        WHERE {src_where} AND {dst_where}
+          AND (r.valid IS NULL OR r.valid = true)
+        SET r += $update_props,
+            r.updated_at = timestamp()
+        RETURN src.name AS source, type(r) AS relationship, dst.name AS destination,
+               properties(r) AS edge_properties
+        """
+
+        results = self.graph.query(cypher, params=params)
+        if not results:
+            return None
+
+        row = results[0]
+        edge_props = {k: v for k, v in (row.get("edge_properties") or {}).items()
+                      if k not in _SYSTEM_RESERVED_KEYS}
+        return {
+            "source": row.get("source", source),
+            "relationship": row.get("relationship", safe_rel),
+            "destination": row.get("destination", destination),
+            "edge_properties": edge_props,
+        }
+
     def _remove_spaces_from_entities(self, entity_list):
         return remove_spaces_from_entities(entity_list, sanitize_relationship=True)
 

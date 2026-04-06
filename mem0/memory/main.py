@@ -1499,6 +1499,67 @@ class Memory(MemoryBase):
                                     relationship_type=relationship_type,
                                     include_invalid=include_invalid, limit=limit)
 
+    # ------------------------------------------------------------------
+    # Phase 4 — Direct node/edge creation API
+    # ------------------------------------------------------------------
+
+    @traced("graph_add_node")
+    def graph_add_node(self, name, *, user_id=None, agent_id=None, run_id=None,
+                       entity_type=None, properties=None, source_node=None,
+                       relationship=None):
+        """Directly add a node to the agent's graph.
+
+        Returns:
+            dict: Created node info, or empty dict if graph not enabled.
+        """
+        if not self.enable_graph:
+            return {}
+        _, filters = _build_filters_and_metadata(user_id=user_id, agent_id=agent_id, run_id=run_id)
+        return self.graph.add_node(name, filters, entity_type=entity_type,
+                                   properties=properties, source_node=source_node,
+                                   relationship=relationship)
+
+    @traced("graph_add_edge")
+    def graph_add_edge(self, source, destination, relationship, *,
+                       user_id=None, agent_id=None, run_id=None, properties=None):
+        """Directly add an edge between existing nodes.
+
+        Returns:
+            dict: Created edge info, or empty dict if graph not enabled.
+        """
+        if not self.enable_graph:
+            return {}
+        _, filters = _build_filters_and_metadata(user_id=user_id, agent_id=agent_id, run_id=run_id)
+        return self.graph.add_edge(source, destination, relationship, filters,
+                                   properties=properties)
+
+    @traced("graph_update_node")
+    def graph_update_node(self, node_name, properties, *,
+                          user_id=None, agent_id=None, run_id=None):
+        """Update properties on a graph node.
+
+        Returns:
+            dict | None: Updated node info, or None if not found / graph not enabled.
+        """
+        if not self.enable_graph:
+            return None
+        _, filters = _build_filters_and_metadata(user_id=user_id, agent_id=agent_id, run_id=run_id)
+        return self.graph.update_node_properties(node_name, filters, properties)
+
+    @traced("graph_update_edge")
+    def graph_update_edge(self, source, destination, relationship, properties, *,
+                          user_id=None, agent_id=None, run_id=None):
+        """Update properties on a graph edge.
+
+        Returns:
+            dict | None: Updated edge info, or None if not found / graph not enabled.
+        """
+        if not self.enable_graph:
+            return None
+        _, filters = _build_filters_and_metadata(user_id=user_id, agent_id=agent_id, run_id=run_id)
+        return self.graph.update_edge_properties(source, destination, relationship,
+                                                 filters, properties)
+
     @traced("reset")
     def reset(self):
         """
@@ -2769,6 +2830,75 @@ class AsyncMemory(MemoryBase):
             self.graph.get_edges, node_name, filters,
             direction=direction, relationship_type=relationship_type,
             include_invalid=include_invalid, limit=limit,
+        )
+
+    # ------------------------------------------------------------------
+    # Phase 4 — Direct node/edge creation API (async)
+    # ------------------------------------------------------------------
+
+    @async_traced("graph_add_node")
+    async def graph_add_node(self, name, *, user_id=None, agent_id=None, run_id=None,
+                             entity_type=None, properties=None, source_node=None,
+                             relationship=None):
+        """Directly add a node to the agent's graph (async).
+
+        Returns:
+            dict: Created node info, or empty dict if graph not enabled.
+        """
+        if not self.enable_graph:
+            return {}
+        _, filters = _build_filters_and_metadata(user_id=user_id, agent_id=agent_id, run_id=run_id)
+        return await asyncio.to_thread(
+            self.graph.add_node, name, filters,
+            entity_type=entity_type, properties=properties,
+            source_node=source_node, relationship=relationship,
+        )
+
+    @async_traced("graph_add_edge")
+    async def graph_add_edge(self, source, destination, relationship, *,
+                             user_id=None, agent_id=None, run_id=None, properties=None):
+        """Directly add an edge between existing nodes (async).
+
+        Returns:
+            dict: Created edge info, or empty dict if graph not enabled.
+        """
+        if not self.enable_graph:
+            return {}
+        _, filters = _build_filters_and_metadata(user_id=user_id, agent_id=agent_id, run_id=run_id)
+        return await asyncio.to_thread(
+            self.graph.add_edge, source, destination, relationship, filters,
+            properties=properties,
+        )
+
+    @async_traced("graph_update_node")
+    async def graph_update_node(self, node_name, properties, *,
+                                user_id=None, agent_id=None, run_id=None):
+        """Update properties on a graph node (async).
+
+        Returns:
+            dict | None: Updated node info, or None if not found / graph not enabled.
+        """
+        if not self.enable_graph:
+            return None
+        _, filters = _build_filters_and_metadata(user_id=user_id, agent_id=agent_id, run_id=run_id)
+        return await asyncio.to_thread(
+            self.graph.update_node_properties, node_name, filters, properties,
+        )
+
+    @async_traced("graph_update_edge")
+    async def graph_update_edge(self, source, destination, relationship, properties, *,
+                                user_id=None, agent_id=None, run_id=None):
+        """Update properties on a graph edge (async).
+
+        Returns:
+            dict | None: Updated edge info, or None if not found / graph not enabled.
+        """
+        if not self.enable_graph:
+            return None
+        _, filters = _build_filters_and_metadata(user_id=user_id, agent_id=agent_id, run_id=run_id)
+        return await asyncio.to_thread(
+            self.graph.update_edge_properties, source, destination, relationship,
+            filters, properties,
         )
 
     @async_traced("reset")
