@@ -1,3 +1,4 @@
+import json
 import logging
 
 from mem0.memory.utils import format_entities, remove_spaces_from_entities
@@ -24,6 +25,68 @@ from mem0.graphs.utils import EXTRACT_RELATIONS_PROMPT, get_delete_messages
 from mem0.utils.factory import EmbedderFactory, LlmFactory
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_entity_properties(item):
+    """Parse properties from an entity extraction result.
+
+    Handles both non-struct tools (``properties`` is a dict) and struct tools
+    (``properties_json`` is a JSON string).
+    """
+    props = item.get("properties")
+    if isinstance(props, dict):
+        return {k: str(v) for k, v in props.items()}
+    props_json = item.get("properties_json")
+    if props_json and isinstance(props_json, str):
+        try:
+            parsed = json.loads(props_json)
+            if isinstance(parsed, dict):
+                return {k: str(v) for k, v in parsed.items()}
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return {}
+
+
+def _parse_relation_properties(item):
+    """Parse properties from a relation extraction result.
+
+    Handles both non-struct tools (``properties`` is a dict) and struct tools
+    (``properties_json`` is a JSON string).
+    """
+    props = item.get("properties")
+    if isinstance(props, dict):
+        return {k: str(v) for k, v in props.items()}
+    props_json = item.get("properties_json")
+    if props_json and isinstance(props_json, str):
+        try:
+            parsed = json.loads(props_json)
+            if isinstance(parsed, dict):
+                return {k: str(v) for k, v in parsed.items()}
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return {}
+
+
+def _sanitize_properties(props):
+    """Sanitize a properties dict for safe storage in Neo4j.
+
+    Ensures all keys are valid identifiers and values are flat strings.
+    Filters out internal/reserved keys.
+    """
+    if not props:
+        return {}
+    reserved = {"name", "user_id", "agent_id", "run_id", "embedding", "mentions",
+                "created", "source", "valid", "created_at", "updated_at",
+                "invalidated_at", "relationship"}
+    sanitized = {}
+    for k, v in props.items():
+        key = k.lower().replace(" ", "_").replace("-", "_")
+        if key in reserved:
+            continue
+        if not key.isidentifier():
+            continue
+        sanitized[key] = str(v) if v is not None else ""
+    return sanitized
 
 
 class MemoryGraph:
@@ -103,15 +166,19 @@ class MemoryGraph:
             limit (int): The maximum number of nodes and relationships to retrieve. Defaults to 100.
 
         Returns:
-            dict: A dictionary containing:
-                - "contexts": List of search results from the base data store.
-                - "entities": List of related graph data based on the query.
+            list: A list of dicts, each containing source, relationship, destination
+                  and optionally source_properties, edge_properties, destination_properties.
         """
         entity_type_map = self._retrieve_nodes_from_data(query, filters)
         search_output = self._search_graph_db(node_list=list(entity_type_map.keys()), filters=filters)
 
         if not search_output:
             return []
+
+        # Internal/system keys to exclude from user-facing properties
+        _system_keys = {"name", "user_id", "agent_id", "run_id", "embedding",
+                        "mentions", "created", "source", "valid", "created_at",
+                        "updated_at", "invalidated_at", "relationship"}
 
         search_outputs_sequence = [
             [item["source"], item["relationship"], item["destination"]] for item in search_output
@@ -121,9 +188,29 @@ class MemoryGraph:
         tokenized_query = query.split(" ")
         reranked_results = bm25.get_top_n(tokenized_query, search_outputs_sequence, n=5)
 
+        # Build a lookup from (source, rel, dest) → original search item for properties
+        props_lookup = {}
+        for item in search_output:
+            key = (item["source"], item["relationship"], item["destination"])
+            if key not in props_lookup:
+                props_lookup[key] = item
+
         search_results = []
         for item in reranked_results:
-            search_results.append({"source": item[0], "relationship": item[1], "destination": item[2]})
+            entry = {"source": item[0], "relationship": item[1], "destination": item[2]}
+            # Attach filtered properties if available
+            original = props_lookup.get((item[0], item[1], item[2]))
+            if original:
+                src_props = {k: v for k, v in (original.get("source_properties") or {}).items() if k not in _system_keys}
+                edge_props = {k: v for k, v in (original.get("edge_properties") or {}).items() if k not in _system_keys}
+                dest_props = {k: v for k, v in (original.get("destination_properties") or {}).items() if k not in _system_keys}
+                if src_props:
+                    entry["source_properties"] = src_props
+                if edge_props:
+                    entry["edge_properties"] = edge_props
+                if dest_props:
+                    entry["destination_properties"] = dest_props
+            search_results.append(entry)
 
         logger.info(f"Returned {len(search_results)} search results")
 
@@ -197,27 +284,42 @@ class MemoryGraph:
         query = f"""
         MATCH (n {self.node_label} {{{node_props_str}}})-[r]->(m {self.node_label} {{{node_props_str}}})
         WHERE r.valid IS NULL OR r.valid = true
-        RETURN n.name AS source, type(r) AS relationship, m.name AS target
+        RETURN n.name AS source, type(r) AS relationship, m.name AS target,
+               properties(n) AS source_properties, properties(r) AS edge_properties, properties(m) AS target_properties
         LIMIT $limit
         """
         results = self.graph.query(query, params=params)
 
+        # Internal/system keys to exclude from user-facing properties
+        _system_keys = {"name", "user_id", "agent_id", "run_id", "embedding",
+                        "mentions", "created", "source", "valid", "created_at",
+                        "updated_at", "invalidated_at", "relationship"}
+
         final_results = []
         for result in results:
-            final_results.append(
-                {
-                    "source": result["source"],
-                    "relationship": result["relationship"],
-                    "target": result["target"],
-                }
-            )
+            entry = {
+                "source": result["source"],
+                "relationship": result["relationship"],
+                "target": result["target"],
+            }
+            # Include custom properties, filtering out system keys
+            src_props = {k: v for k, v in (result.get("source_properties") or {}).items() if k not in _system_keys}
+            edge_props = {k: v for k, v in (result.get("edge_properties") or {}).items() if k not in _system_keys}
+            tgt_props = {k: v for k, v in (result.get("target_properties") or {}).items() if k not in _system_keys}
+            if src_props:
+                entry["source_properties"] = src_props
+            if edge_props:
+                entry["edge_properties"] = edge_props
+            if tgt_props:
+                entry["target_properties"] = tgt_props
+            final_results.append(entry)
 
         logger.info(f"Retrieved {len(final_results)} relationships")
 
         return final_results
 
     def _retrieve_nodes_from_data(self, data, filters):
-        """Extracts all the entities mentioned in the query."""
+        """Extracts all the entities mentioned in the query, including their properties."""
         _tools = [EXTRACT_ENTITIES_TOOL]
         if self.llm_provider in ["azure_openai_structured", "openai_structured"]:
             _tools = [EXTRACT_ENTITIES_STRUCT_TOOL]
@@ -225,7 +327,7 @@ class MemoryGraph:
             messages=[
                 {
                     "role": "system",
-                    "content": f"You are a smart assistant who understands entities and their types in a given text. If user message contains self reference such as 'I', 'me', 'my' etc. then use {filters['user_id']} as the source entity. Extract all the entities from the text. ***DO NOT*** answer the question itself if the given text is a question.",
+                    "content": f"You are a smart assistant who understands entities and their types in a given text. If user message contains self reference such as 'I', 'me', 'my' etc. then use {filters['user_id']} as the source entity. Extract all the entities from the text along with any notable properties (key-value attributes) for each entity. ***DO NOT*** answer the question itself if the given text is a question.",
                 },
                 {"role": "user", "content": data},
             ],
@@ -239,13 +341,26 @@ class MemoryGraph:
                 if tool_call["name"] != "extract_entities":
                     continue
                 for item in tool_call.get("arguments", {}).get("entities", []):
-                    entity_type_map[item["entity"]] = item["entity_type"]
+                    entity_name = item["entity"]
+                    entity_type = item["entity_type"]
+                    # Parse properties: from dict (non-struct) or JSON string (struct)
+                    properties = _parse_entity_properties(item)
+                    entity_type_map[entity_name] = {
+                        "type": entity_type,
+                        "properties": properties,
+                    }
         except Exception as e:
             logger.exception(
                 f"Error in search tool: {e}, llm_provider={self.llm_provider}, search_results={search_results}"
             )
 
-        entity_type_map = {k.lower().replace(" ", "_"): v.lower().replace(" ", "_") for k, v in entity_type_map.items()}
+        entity_type_map = {
+            k.lower().replace(" ", "_"): {
+                "type": v["type"].lower().replace(" ", "_"),
+                "properties": v.get("properties", {}),
+            }
+            for k, v in entity_type_map.items()
+        }
         logger.debug(f"Entity type map: {entity_type_map}\n search_results={search_results}")
         return entity_type_map
 
@@ -262,7 +377,7 @@ class MemoryGraph:
         if self.config.graph_store.custom_prompt:
             system_content = EXTRACT_RELATIONS_PROMPT.replace("USER_ID", user_identity)
             # Add the custom prompt line if configured
-            system_content = system_content.replace("CUSTOM_PROMPT", f"4. {self.config.graph_store.custom_prompt}")
+            system_content = system_content.replace("CUSTOM_PROMPT", f"5. {self.config.graph_store.custom_prompt}")
             messages = [
                 {"role": "system", "content": system_content},
                 {"role": "user", "content": data},
@@ -285,14 +400,25 @@ class MemoryGraph:
 
         entities = []
         if extracted_entities.get("tool_calls"):
-            entities = extracted_entities["tool_calls"][0].get("arguments", {}).get("entities", [])
+            raw_entities = extracted_entities["tool_calls"][0].get("arguments", {}).get("entities", [])
+            # Parse relationship properties from each entity
+            for item in raw_entities:
+                if isinstance(item, dict):
+                    item["edge_properties"] = _parse_relation_properties(item)
+                    # Remove the raw properties fields to avoid confusion downstream
+                    item.pop("properties", None)
+                    item.pop("properties_json", None)
+            entities = raw_entities
 
         entities = self._remove_spaces_from_entities(entities)
         logger.debug(f"Extracted entities: {entities}")
         return entities
 
     def _search_graph_db(self, node_list, filters, limit=100):
-        """Search similar nodes among and their respective incoming and outgoing relations."""
+        """Search similar nodes among and their respective incoming and outgoing relations.
+
+        Returns properties on source nodes, edges, and destination nodes when available.
+        """
         result_relations = []
 
         # Build node properties for filtering
@@ -315,15 +441,19 @@ class MemoryGraph:
                 WITH n
                 MATCH (n)-[r]->(m {self.node_label} {{{node_props_str}}})
                 WHERE r.valid IS NULL OR r.valid = true
-                RETURN n.name AS source, elementId(n) AS source_id, type(r) AS relationship, elementId(r) AS relation_id, m.name AS destination, elementId(m) AS destination_id
+                RETURN n.name AS source, elementId(n) AS source_id, type(r) AS relationship, elementId(r) AS relation_id, m.name AS destination, elementId(m) AS destination_id,
+                       properties(n) AS source_properties, properties(r) AS edge_properties, properties(m) AS destination_properties
                 UNION
-                WITH n  
+                WITH n
                 MATCH (n)<-[r]-(m {self.node_label} {{{node_props_str}}})
                 WHERE r.valid IS NULL OR r.valid = true
-                RETURN m.name AS source, elementId(m) AS source_id, type(r) AS relationship, elementId(r) AS relation_id, n.name AS destination, elementId(n) AS destination_id
+                RETURN m.name AS source, elementId(m) AS source_id, type(r) AS relationship, elementId(r) AS relation_id, n.name AS destination, elementId(n) AS destination_id,
+                       properties(m) AS source_properties, properties(r) AS edge_properties, properties(n) AS destination_properties
             }}
-            WITH distinct source, source_id, relationship, relation_id, destination, destination_id, similarity
-            RETURN source, source_id, relationship, relation_id, destination, destination_id, similarity
+            WITH distinct source, source_id, relationship, relation_id, destination, destination_id, similarity,
+                 source_properties, edge_properties, destination_properties
+            RETURN source, source_id, relationship, relation_id, destination, destination_id, similarity,
+                   source_properties, edge_properties, destination_properties
             ORDER BY similarity DESC
             LIMIT $limit
             """
@@ -438,7 +568,12 @@ class MemoryGraph:
         return results
 
     def _add_entities(self, to_be_added, filters, entity_type_map):
-        """Add the new entities to the graph. Merge the nodes if they already exist."""
+        """Add the new entities to the graph. Merge the nodes if they already exist.
+
+        Supports rich properties on both nodes and edges.  ``entity_type_map``
+        values may be plain strings (legacy) or dicts with ``type`` and
+        ``properties`` keys (new rich format from Phase 1).
+        """
         user_id = filters["user_id"]
         agent_id = filters.get("agent_id", None)
         run_id = filters.get("run_id", None)
@@ -449,13 +584,33 @@ class MemoryGraph:
             destination = item["destination"]
             relationship = item["relationship"]
 
-            # types
-            source_type = entity_type_map.get(source, "__User__")
+            # Edge properties extracted alongside the relationship
+            edge_props = _sanitize_properties(item.get("edge_properties", {}))
+
+            # types — handle both legacy (str) and new (dict) entity_type_map values
+            source_info = entity_type_map.get(source, "__User__")
+            if isinstance(source_info, dict):
+                source_type = source_info.get("type", "__User__")
+                source_node_props = _sanitize_properties(source_info.get("properties", {}))
+            else:
+                source_type = source_info
+                source_node_props = {}
+
+            destination_info = entity_type_map.get(destination, "__User__")
+            if isinstance(destination_info, dict):
+                destination_type = destination_info.get("type", "__User__")
+                dest_node_props = _sanitize_properties(destination_info.get("properties", {}))
+            else:
+                destination_type = destination_info
+                dest_node_props = {}
+
             source_label = self.node_label if self.node_label else f":`{source_type}`"
             source_extra_set = f", source:`{source_type}`" if self.node_label else ""
-            destination_type = entity_type_map.get(destination, "__User__")
             destination_label = self.node_label if self.node_label else f":`{destination_type}`"
             destination_extra_set = f", destination:`{destination_type}`" if self.node_label else ""
+
+            # Cypher fragments for setting custom properties on edges
+            edge_props_set = ", r += $edge_props" if edge_props else ""
 
             # embeddings
             source_embedding = self.embedding_model.embed(source)
@@ -479,6 +634,7 @@ class MemoryGraph:
                 MATCH (source)
                 WHERE elementId(source) = $source_id
                 SET source.mentions = coalesce(source.mentions, 0) + 1
+                SET source += $source_node_props
                 WITH source
                 MERGE (destination {destination_label} {{{merge_props_str}}})
                 ON CREATE SET
@@ -488,6 +644,8 @@ class MemoryGraph:
                 ON MATCH SET
                     destination.mentions = coalesce(destination.mentions, 0) + 1
                 WITH source, destination
+                SET destination += $dest_node_props
+                WITH source, destination
                 CALL db.create.setNodeVectorProperty(destination, 'embedding', $destination_embedding)
                 WITH source, destination
                 MERGE (source)-[r:{relationship}]->(destination)
@@ -496,11 +654,13 @@ class MemoryGraph:
                     r.updated_at = timestamp(),
                     r.mentions = 1,
                     r.valid = true
+                    {edge_props_set}
                 ON MATCH SET
                     r.mentions = coalesce(r.mentions, 0) + 1,
                     r.valid = true,
                     r.updated_at = timestamp(),
                     r.invalidated_at = null
+                    {edge_props_set}
                 RETURN source.name AS source, type(r) AS relationship, destination.name AS target
                 """
 
@@ -509,6 +669,9 @@ class MemoryGraph:
                     "destination_name": destination,
                     "destination_embedding": dest_embedding,
                     "user_id": user_id,
+                    "source_node_props": source_node_props,
+                    "dest_node_props": dest_node_props,
+                    "edge_props": edge_props,
                 }
                 if agent_id:
                     params["agent_id"] = agent_id
@@ -528,6 +691,7 @@ class MemoryGraph:
                 MATCH (destination)
                 WHERE elementId(destination) = $destination_id
                 SET destination.mentions = coalesce(destination.mentions, 0) + 1
+                SET destination += $dest_node_props
                 WITH destination
                 MERGE (source {source_label} {{{merge_props_str}}})
                 ON CREATE SET
@@ -537,6 +701,8 @@ class MemoryGraph:
                 ON MATCH SET
                     source.mentions = coalesce(source.mentions, 0) + 1
                 WITH source, destination
+                SET source += $source_node_props
+                WITH source, destination
                 CALL db.create.setNodeVectorProperty(source, 'embedding', $source_embedding)
                 WITH source, destination
                 MERGE (source)-[r:{relationship}]->(destination)
@@ -545,11 +711,13 @@ class MemoryGraph:
                     r.updated_at = timestamp(),
                     r.mentions = 1,
                     r.valid = true
+                    {edge_props_set}
                 ON MATCH SET
                     r.mentions = coalesce(r.mentions, 0) + 1,
                     r.valid = true,
                     r.updated_at = timestamp(),
                     r.invalidated_at = null
+                    {edge_props_set}
                 RETURN source.name AS source, type(r) AS relationship, destination.name AS target
                 """
 
@@ -558,6 +726,9 @@ class MemoryGraph:
                     "source_name": source,
                     "source_embedding": source_embedding,
                     "user_id": user_id,
+                    "source_node_props": source_node_props,
+                    "dest_node_props": dest_node_props,
+                    "edge_props": edge_props,
                 }
                 if agent_id:
                     params["agent_id"] = agent_id
@@ -569,21 +740,25 @@ class MemoryGraph:
                 MATCH (source)
                 WHERE elementId(source) = $source_id
                 SET source.mentions = coalesce(source.mentions, 0) + 1
+                SET source += $source_node_props
                 WITH source
                 MATCH (destination)
                 WHERE elementId(destination) = $destination_id
                 SET destination.mentions = coalesce(destination.mentions, 0) + 1
+                SET destination += $dest_node_props
                 MERGE (source)-[r:{relationship}]->(destination)
                 ON CREATE SET
                     r.created_at = timestamp(),
                     r.updated_at = timestamp(),
                     r.mentions = 1,
                     r.valid = true
+                    {edge_props_set}
                 ON MATCH SET
                     r.mentions = coalesce(r.mentions, 0) + 1,
                     r.valid = true,
                     r.updated_at = timestamp(),
                     r.invalidated_at = null
+                    {edge_props_set}
                 RETURN source.name AS source, type(r) AS relationship, destination.name AS target
                 """
 
@@ -591,6 +766,9 @@ class MemoryGraph:
                     "source_id": source_node_search_result[0]["elementId(source_candidate)"],
                     "destination_id": destination_node_search_result[0]["elementId(destination_candidate)"],
                     "user_id": user_id,
+                    "source_node_props": source_node_props,
+                    "dest_node_props": dest_node_props,
+                    "edge_props": edge_props,
                 }
                 if agent_id:
                     params["agent_id"] = agent_id
@@ -599,45 +777,51 @@ class MemoryGraph:
 
             else:
                 # Build dynamic MERGE props for both source and destination
-                source_props = ["name: $source_name", "user_id: $user_id"]
-                dest_props = ["name: $dest_name", "user_id: $user_id"]
+                source_merge = ["name: $source_name", "user_id: $user_id"]
+                dest_merge = ["name: $dest_name", "user_id: $user_id"]
                 if agent_id:
-                    source_props.append("agent_id: $agent_id")
-                    dest_props.append("agent_id: $agent_id")
+                    source_merge.append("agent_id: $agent_id")
+                    dest_merge.append("agent_id: $agent_id")
                 if run_id:
-                    source_props.append("run_id: $run_id")
-                    dest_props.append("run_id: $run_id")
-                source_props_str = ", ".join(source_props)
-                dest_props_str = ", ".join(dest_props)
+                    source_merge.append("run_id: $run_id")
+                    dest_merge.append("run_id: $run_id")
+                source_merge_str = ", ".join(source_merge)
+                dest_merge_str = ", ".join(dest_merge)
 
                 cypher = f"""
-                MERGE (source {source_label} {{{source_props_str}}})
+                MERGE (source {source_label} {{{source_merge_str}}})
                 ON CREATE SET source.created = timestamp(),
                             source.mentions = 1
                             {source_extra_set}
                 ON MATCH SET source.mentions = coalesce(source.mentions, 0) + 1
                 WITH source
+                SET source += $source_node_props
+                WITH source
                 CALL db.create.setNodeVectorProperty(source, 'embedding', $source_embedding)
                 WITH source
-                MERGE (destination {destination_label} {{{dest_props_str}}})
+                MERGE (destination {destination_label} {{{dest_merge_str}}})
                 ON CREATE SET destination.created = timestamp(),
                             destination.mentions = 1
                             {destination_extra_set}
                 ON MATCH SET destination.mentions = coalesce(destination.mentions, 0) + 1
                 WITH source, destination
-                CALL db.create.setNodeVectorProperty(destination, 'embedding', $dest_embedding)
+                SET destination += $dest_node_props
                 WITH source, destination
+                CALL db.create.setNodeVectorProperty(destination, 'embedding', $dest_embedding)
+                With source, destination
                 MERGE (source)-[r:{relationship}]->(destination)
                 ON CREATE SET
                     r.created_at = timestamp(),
                     r.updated_at = timestamp(),
                     r.mentions = 1,
                     r.valid = true
+                    {edge_props_set}
                 ON MATCH SET
                     r.mentions = coalesce(r.mentions, 0) + 1,
                     r.valid = true,
                     r.updated_at = timestamp(),
                     r.invalidated_at = null
+                    {edge_props_set}
                 RETURN source.name AS source, type(r) AS relationship, destination.name AS target
                 """
 
@@ -647,6 +831,9 @@ class MemoryGraph:
                     "source_embedding": source_embedding,
                     "dest_embedding": dest_embedding,
                     "user_id": user_id,
+                    "source_node_props": source_node_props,
+                    "dest_node_props": dest_node_props,
+                    "edge_props": edge_props,
                 }
                 if agent_id:
                     params["agent_id"] = agent_id

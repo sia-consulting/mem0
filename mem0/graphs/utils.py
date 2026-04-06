@@ -39,12 +39,20 @@ You are an advanced algorithm designed to extract structured information from te
 1. Extract only explicitly stated information from the text.
 2. Establish relationships among the entities provided.
 3. Use "USER_ID" as the source entity for any self-references (e.g., "I," "me," "my," etc.) in user messages.
+4. Extract properties (key-value attributes) for relationships when explicitly stated in the text. Properties capture important details about the relationship such as timestamps, methods, capacities, or other qualifying information.
 CUSTOM_PROMPT
 
 Relationships:
     - Use consistent, general, and timeless relationship types.
     - Example: Prefer "professor" over "became_professor."
     - Relationships should only be established among the entities explicitly mentioned in the user message.
+
+Properties on Relationships:
+    - Extract qualifying information about how/when/why the relationship exists.
+    - Example: A "works_at" relationship might have properties like {"since": "2024", "role": "senior_engineer"}.
+    - Only include properties that are explicitly stated in the text.
+    - Property keys should be lowercase with underscores.
+    - Property values should be strings.
 
 Entity Consistency:
     - Ensure that relationships are coherent and logically align with the context of the message.

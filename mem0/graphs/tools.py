@@ -86,7 +86,7 @@ RELATIONS_TOOL = {
     "type": "function",
     "function": {
         "name": "establish_relationships",
-        "description": "Establish relationships among the entities based on the provided text.",
+        "description": "Establish relationships among the entities based on the provided text. Include any notable properties on the relationships.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -103,6 +103,11 @@ RELATIONS_TOOL = {
                             "destination": {
                                 "type": "string",
                                 "description": "The destination entity of the relationship.",
+                            },
+                            "properties": {
+                                "type": "object",
+                                "description": "Key-value properties/attributes of this relationship extracted from the text (e.g. since, capacity, method). Only include properties that are explicitly stated.",
+                                "additionalProperties": {"type": "string"},
                             },
                         },
                         "required": [
@@ -125,7 +130,7 @@ EXTRACT_ENTITIES_TOOL = {
     "type": "function",
     "function": {
         "name": "extract_entities",
-        "description": "Extract entities and their types from the text.",
+        "description": "Extract entities and their types from the text, along with any notable properties (key-value attributes) for each entity.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -136,11 +141,16 @@ EXTRACT_ENTITIES_TOOL = {
                         "properties": {
                             "entity": {"type": "string", "description": "The name or identifier of the entity."},
                             "entity_type": {"type": "string", "description": "The type or category of the entity."},
+                            "properties": {
+                                "type": "object",
+                                "description": "Key-value properties/attributes of this entity extracted from the text (e.g. email, role, location). Only include properties that are explicitly stated.",
+                                "additionalProperties": {"type": "string"},
+                            },
                         },
                         "required": ["entity", "entity_type"],
                         "additionalProperties": False,
                     },
-                    "description": "An array of entities with their types.",
+                    "description": "An array of entities with their types and optional properties.",
                 }
             },
             "required": ["entities"],
@@ -239,7 +249,7 @@ RELATIONS_STRUCT_TOOL = {
     "type": "function",
     "function": {
         "name": "establish_relations",
-        "description": "Establish relationships among the entities based on the provided text.",
+        "description": "Establish relationships among the entities based on the provided text. Include any notable properties on the relationships.",
         "strict": True,
         "parameters": {
             "type": "object",
@@ -261,11 +271,16 @@ RELATIONS_STRUCT_TOOL = {
                                 "type": "string",
                                 "description": "The destination entity of the relationship.",
                             },
+                            "properties_json": {
+                                "type": "string",
+                                "description": "A JSON string of key-value properties for this relationship (e.g. '{\"since\": \"2024-01\", \"method\": \"email\"}'). Empty string if none.",
+                            },
                         },
                         "required": [
                             "source",
                             "relationship",
                             "destination",
+                            "properties_json",
                         ],
                         "additionalProperties": False,
                     },
@@ -282,7 +297,7 @@ EXTRACT_ENTITIES_STRUCT_TOOL = {
     "type": "function",
     "function": {
         "name": "extract_entities",
-        "description": "Extract entities and their types from the text.",
+        "description": "Extract entities and their types from the text, along with any notable properties.",
         "strict": True,
         "parameters": {
             "type": "object",
@@ -294,11 +309,15 @@ EXTRACT_ENTITIES_STRUCT_TOOL = {
                         "properties": {
                             "entity": {"type": "string", "description": "The name or identifier of the entity."},
                             "entity_type": {"type": "string", "description": "The type or category of the entity."},
+                            "properties_json": {
+                                "type": "string",
+                                "description": "A JSON string of key-value properties for this entity (e.g. '{\"email\": \"a@b.com\", \"role\": \"manager\"}'). Empty string if none.",
+                            },
                         },
-                        "required": ["entity", "entity_type"],
+                        "required": ["entity", "entity_type", "properties_json"],
                         "additionalProperties": False,
                     },
-                    "description": "An array of entities with their types.",
+                    "description": "An array of entities with their types and optional properties.",
                 }
             },
             "required": ["entities"],

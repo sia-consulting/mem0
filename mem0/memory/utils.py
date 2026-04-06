@@ -278,6 +278,8 @@ def remove_spaces_from_entities(
     Skips entries that are not non-empty dicts or that lack any of
     ``source``, ``relationship``, or ``destination`` (avoids KeyError on ``[{}]``
     or partial dicts).
+
+    Preserves additional keys such as ``edge_properties`` and ``properties``.
     """
     required = ("source", "relationship", "destination")
     cleaned: List[Dict[str, Any]] = []
